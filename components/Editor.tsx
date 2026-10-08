@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { baseName, longDate } from "@/lib/derive";
+import { caretTopInTextarea, sourceOffsetFromTap } from "@/lib/caret";
 import { renderMarkdown, toggleTaskLine } from "@/lib/markdown";
 import { createNote, discardNote, flushPending, newNoteId, purgeNotes, updateNote, useStore } from "@/lib/store";
 import type { Note } from "@/lib/types";
@@ -97,7 +99,8 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
   const sheet = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
-  const pendingCaret = useRef<number | null>(null);
+  /** Where to put the caret when edit mode opens; `y` keeps that line under the finger. */
+  const pendingCaret = useRef<{ pos: number; y?: number } | null>(null);
   const kb = useVisualViewport(sheet);
 
   // Pull in edits from other devices unless the user is typing in that field.
@@ -115,15 +118,18 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
     autosize(bodyRef.current);
     if (mode === "edit" && pendingCaret.current !== null && bodyRef.current) {
       const el = bodyRef.current;
-      const pos = pendingCaret.current;
+      const { pos, y } = pendingCaret.current;
       pendingCaret.current = null;
       el.focus({ preventScroll: true });
       el.setSelectionRange(pos, pos);
-      // Scroll the caret's line into view.
-      const lineH = 25.6;
-      const line = body.slice(0, pos).split("\n").length - 1;
       const scroller = el.closest(".editor-scroll");
-      if (scroller) scroller.scrollTop = Math.max(0, el.offsetTop + line * lineH - scroller.clientHeight / 3);
+      if (scroller) {
+        const lineH = parseFloat(getComputedStyle(el).lineHeight) || 25;
+        const caretY = el.getBoundingClientRect().top + caretTopInTextarea(el, pos) + lineH / 2;
+        // Keep the tapped line where the finger was; otherwise bring it a third of the way down.
+        const target = y ?? scroller.getBoundingClientRect().top + scroller.clientHeight / 3;
+        scroller.scrollTop = Math.max(0, scroller.scrollTop + caretY - target);
+      }
     }
   }, [body, mode]);
 
@@ -178,7 +184,7 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
       bodyRef.current.setSelectionRange(pos, pos);
       return;
     }
-    pendingCaret.current = pos;
+    pendingCaret.current = { pos };
     setMode("edit");
   };
 
@@ -199,14 +205,26 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
     if (t.closest("a[href]")) return;
     if (window.getSelection()?.toString()) return; // let people select text to copy
     const block = t.closest<HTMLElement>("[data-line]");
-    if (!block) return enterEdit(null);
-    // Put the caret at the end of the tapped block (paragraph, list item, heading…).
-    let line = Number(block.dataset.lineEnd ?? block.dataset.line);
-    const lines = body.split("\n");
-    while (line > Number(block.dataset.line) && !lines[line]?.trim()) line--;
-    let pos = 0;
-    for (let i = 0; i < line && i < lines.length; i++) pos += lines[i].length + 1;
-    enterEdit(pos + (lines[line]?.length ?? 0));
+    let pos: number;
+    if (!block) pos = body.length;
+    else {
+      // Exactly where the tap landed; failing that, the end of the tapped block.
+      const exact = sourceOffsetFromTap(block, e.clientX, e.clientY, body);
+      if (exact !== null) pos = exact;
+      else {
+        let line = Number(block.dataset.lineEnd ?? block.dataset.line);
+        const lines = body.split("\n");
+        while (line > Number(block.dataset.line) && !lines[line]?.trim()) line--;
+        pos = 0;
+        for (let i = 0; i < line && i < lines.length; i++) pos += lines[i].length + 1;
+        pos += lines[line]?.length ?? 0;
+      }
+    }
+    // Switch to the editor synchronously, inside the tap, so iOS raises the keyboard.
+    flushSync(() => {
+      pendingCaret.current = { pos, y: e.clientY };
+      setMode("edit");
+    });
   };
 
   const insert = (text: string, replaceFrom?: number) => {
