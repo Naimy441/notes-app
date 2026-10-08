@@ -15,6 +15,7 @@ import { FolderCard } from "./FolderCard";
 import {
   ArchiveIcon,
   BackIcon,
+  BrandGlyph,
   ChevronRightIcon,
   CloseIcon,
   CloudDoneIcon,
@@ -352,7 +353,7 @@ export function Shell({ user, onSignOut }: Props) {
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div className="brand desk-only" style={{ width: 248, padding: "0 6px", flex: "none" }}>
             <div className="brand-mark">
-              <NotesIcon size={18} />
+              <BrandGlyph size={19} />
             </div>
             Notes
           </div>
@@ -447,7 +448,7 @@ export function Shell({ user, onSignOut }: Props) {
           <aside className={`drawer${drawer === "closing" ? " closing" : ""}`}>
             <div className="brand">
               <div className="brand-mark">
-                <NotesIcon size={18} />
+                <BrandGlyph size={19} />
               </div>
               Notes
             </div>

@@ -133,3 +133,15 @@ export function GoogleLogo({ size = 20 }: { size?: number }) {
     </svg>
   );
 }
+
+/** The app mark (same masonry cards as the app icon), drawn on the amber brand tile. */
+export function BrandGlyph({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="10 9 44 46" aria-hidden="true">
+      <rect x="12" y="11" width="18" height="24" rx="4.5" fill="#FFFDF6" />
+      <rect x="12" y="39" width="18" height="14" rx="4.5" fill="#FFFDF6" />
+      <rect x="34" y="11" width="18" height="14" rx="4.5" fill="#3B2A00" />
+      <rect x="34" y="29" width="18" height="24" rx="4.5" fill="#FFFDF6" />
+    </svg>
+  );
+}

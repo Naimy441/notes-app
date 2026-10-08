@@ -6,7 +6,7 @@ import { signIn, signOut, useAuth, wasSignedIn } from "@/lib/auth";
 import { getDb } from "@/lib/firebase";
 import { applyTheme, usePrefs } from "@/lib/prefs";
 import { loadCache, startSync, stopSync } from "@/lib/store";
-import { GoogleLogo, NotesIcon } from "./icons";
+import { BrandGlyph, GoogleLogo } from "./icons";
 import { Shell } from "./Shell";
 import { Splash } from "./Splash";
 
@@ -61,7 +61,7 @@ function SignIn({ error }: { error: string | null }) {
     <div className="signin">
       <div className="signin-card">
         <div className="signin-logo">
-          <NotesIcon size={42} />
+          <BrandGlyph size={46} />
         </div>
         <h1>Notes</h1>
         <p>Your notes, everywhere — synced with Obsidian.</p>
