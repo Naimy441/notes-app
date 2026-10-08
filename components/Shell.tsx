@@ -269,11 +269,7 @@ export function Shell({ user, onSignOut }: Props) {
 
   let content: React.ReactNode;
   if (loading) {
-    content = (
-      <div style={{ marginTop: 18 }}>
-        <GridSkeleton />
-      </div>
-    );
+    content = <GridSkeleton />;
   } else if (searching) {
     content = (
       <SearchResults

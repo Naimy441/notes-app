@@ -1644,10 +1644,15 @@ mark.hit {
 
 /* ───────────────────────── skeleton ───────────────────────── */
 
+.skel-grid {
+  margin-top: 18px;
+  transition: opacity 0.3s var(--ease);
+}
 .skel {
   border-radius: var(--radius);
   background: var(--card);
   border: 1px solid var(--border);
+  padding: 15px 14px 14px;
   position: relative;
   overflow: hidden;
 }
@@ -1656,12 +1661,51 @@ mark.hit {
   position: absolute;
   inset: 0;
   background: linear-gradient(90deg, transparent, var(--field), transparent);
-  animation: shimmer 1.3s infinite;
+  animation: shimmer 1.4s infinite;
   transform: translateX(-100%);
+}
+.skel-line {
+  height: 9px;
+  border-radius: 5px;
+  background: var(--field-hover);
+  margin-top: 9px;
+}
+.skel-line.title {
+  height: 12px;
+  width: 62%;
+  margin: 0 0 14px;
 }
 @keyframes shimmer {
   to {
     transform: translateX(100%);
+  }
+}
+
+/* ───────────────────────── launch screen ───────────────────────── */
+
+.launch {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+}
+.launch-logo {
+  width: 76px;
+  height: 76px;
+  border-radius: 22px;
+  background: linear-gradient(145deg, #ffd34d, #f2a900);
+  display: grid;
+  place-items: center;
+  box-shadow:
+    0 16px 40px rgb(242 169 0 / 0.3),
+    inset 0 -3px 0 rgb(0 0 0 / 0.08);
+  /* Invisible for the first moment so quick loads never flash it. */
+  animation: launch-in 0.45s var(--ease) 0.35s both;
+}
+@keyframes launch-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
   }
 }
 

@@ -148,14 +148,34 @@ export function NoteGrid({ notes, resetKey, showFolder = false, dateKey, terms, 
   );
 }
 
-export function GridSkeleton() {
-  const hs = [150, 220, 120, 260, 180, 140, 230, 170];
+// Fixed, natural-looking card shapes (lines of body text per card) so the
+// placeholder resembles a real notes grid rather than random blocks.
+const SKELETON_CARDS = [5, 2, 7, 3, 4, 6, 2, 5, 3, 7, 4, 2, 6, 3, 5, 4];
+
+/**
+ * Placeholder grid shown only when notes take a while to arrive (first load on a
+ * new device). Waits `delay` ms before appearing so fast loads never flash it.
+ */
+export function GridSkeleton({ delay = 450 }: { delay?: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const { cols } = useColumns(ref);
+  const [visible, setVisible] = useState(delay === 0);
+  useEffect(() => {
+    if (delay === 0) return;
+    const t = setTimeout(() => setVisible(true), delay);
+    return () => clearTimeout(t);
+  }, [delay]);
   return (
-    <div className="masonry" aria-hidden="true">
-      {[0, 1].map((c) => (
+    <div ref={ref} className="masonry skel-grid" aria-hidden="true" style={{ opacity: visible ? 1 : 0 }}>
+      {Array.from({ length: cols }, (_, c) => (
         <div className="col" key={c}>
-          {hs.filter((_, i) => i % 2 === c).map((h, i) => (
-            <div key={i} className="skel" style={{ height: h }} />
+          {SKELETON_CARDS.filter((_, i) => i % cols === c).map((lines, i) => (
+            <div key={i} className="skel">
+              <div className="skel-line title" />
+              {Array.from({ length: lines }, (_, j) => (
+                <div key={j} className="skel-line" style={{ width: j === lines - 1 ? "55%" : `${88 - ((i + j) % 3) * 9}%` }} />
+              ))}
+            </div>
           ))}
         </div>
       ))}

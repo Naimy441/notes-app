@@ -61,7 +61,7 @@ function SignIn({ error }: { error: string | null }) {
     <div className="signin">
       <div className="signin-card">
         <div className="signin-logo">
-          <BrandGlyph size={46} />
+          <BrandGlyph size={52} />
         </div>
         <h1>Notes</h1>
         <p>Your notes, everywhere — synced with Obsidian.</p>
