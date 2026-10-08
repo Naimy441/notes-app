@@ -1,20 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { flushSync } from "react-dom";
+import type { EditorView } from "@codemirror/view";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { baseName, longDate } from "@/lib/derive";
-import { caretTopInTextarea, sourceOffsetFromTap } from "@/lib/caret";
-import { renderMarkdown, toggleTaskLine } from "@/lib/markdown";
 import { createNote, discardNote, flushPending, newNoteId, purgeNotes, updateNote, useStore } from "@/lib/store";
 import type { Note } from "@/lib/types";
 import { FolderPicker } from "./FolderPicker";
+import { NoteBody, setRemoteText } from "./NoteBody";
 import {
   ArchiveIcon,
   BackIcon,
   CheckboxIcon,
   CopyIcon,
-  EditIcon,
-  EyeIcon,
   FolderIcon,
   LinkIcon,
   MoreIcon,
@@ -47,8 +44,6 @@ function markdownLink(text: string, rawUrl: string) {
   if (!text) return `<${url}>`;
   return `[${text.replace(/([[\]\\])/g, "\\$1")}](${url})`;
 }
-
-const LIST_RE = /^(\s*)([-*+]|(\d+)([.)]))\s+(\[[ xX]\]\s+)?/;
 
 function autosize(el: HTMLTextAreaElement | null) {
   if (!el) return;
@@ -92,47 +87,29 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
 
   const [title, setTitle] = useState(note?.title ?? "");
   const [body, setBody] = useState(note?.body ?? "");
-  const [mode, setMode] = useState<"edit" | "preview">(isNew || !note?.body ? "edit" : "preview");
   const [showCreated, setShowCreated] = useState(false);
   const [picking, setPicking] = useState(false);
 
   const sheet = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLTextAreaElement>(null);
-  const bodyRef = useRef<HTMLTextAreaElement>(null);
-  /** Where to put the caret when edit mode opens; `y` keeps that line under the finger. */
-  const pendingCaret = useRef<{ pos: number; y?: number } | null>(null);
+  const view = useRef<EditorView | null>(null);
+  const [initialBody] = useState(body);
   const kb = useVisualViewport(sheet);
 
   // Pull in edits from other devices unless the user is typing in that field.
   const remoteBody = note?.body;
   const remoteTitle = note?.title;
   useEffect(() => {
-    if (remoteBody !== undefined && document.activeElement !== bodyRef.current) setBody(remoteBody);
+    const v = view.current;
+    if (remoteBody === undefined || !v || v.hasFocus) return;
+    setRemoteText(v, remoteBody);
+    setBody(remoteBody);
   }, [remoteBody]);
   useEffect(() => {
     if (remoteTitle !== undefined && document.activeElement !== titleRef.current) setTitle(remoteTitle);
   }, [remoteTitle]);
 
   useLayoutEffect(() => autosize(titleRef.current), [title]);
-  useLayoutEffect(() => {
-    autosize(bodyRef.current);
-    if (mode === "edit" && pendingCaret.current !== null && bodyRef.current) {
-      const el = bodyRef.current;
-      const { pos, y } = pendingCaret.current;
-      pendingCaret.current = null;
-      el.focus({ preventScroll: true });
-      el.setSelectionRange(pos, pos);
-      const scroller = el.closest(".editor-scroll");
-      if (scroller) {
-        const lineH = parseFloat(getComputedStyle(el).lineHeight) || 25;
-        const caretY = el.getBoundingClientRect().top + caretTopInTextarea(el, pos) + lineH / 2;
-        // Keep the tapped line where the finger was; otherwise bring it a third of the way down.
-        const target = y ?? scroller.getBoundingClientRect().top + scroller.clientHeight / 3;
-        scroller.scrollTop = Math.max(0, scroller.scrollTop + caretY - target);
-      }
-    }
-  }, [body, mode]);
-
   useEffect(() => {
     if (!isNew) return;
     // Focus after the open animation so iOS raises the keyboard reliably.
@@ -175,113 +152,32 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
     return () => window.removeEventListener("keydown", onKey);
   }, [close, picking]);
 
-  const html = useMemo(() => (mode === "preview" ? renderMarkdown(body) : ""), [mode, body]);
-
-  const enterEdit = (caret: number | null) => {
-    const pos = caret ?? body.length;
-    if (mode === "edit" && bodyRef.current) {
-      bodyRef.current.focus();
-      bodyRef.current.setSelectionRange(pos, pos);
-      return;
-    }
-    pendingCaret.current = { pos };
-    setMode("edit");
-  };
-
-  const onPreviewClick = (e: React.MouseEvent) => {
-    const t = e.target as HTMLElement;
-    if (t instanceof HTMLInputElement && t.dataset.taskLine) {
-      const next = toggleTaskLine(body, Number(t.dataset.taskLine));
-      setBody(next);
-      save({ body: next });
-      return;
-    }
-    const wl = t.closest<HTMLElement>("a.wikilink");
-    if (wl) {
-      e.preventDefault();
-      onWikilink(wl.dataset.wikilink ?? "");
-      return;
-    }
-    if (t.closest("a[href]")) return;
-    if (window.getSelection()?.toString()) return; // let people select text to copy
-    const block = t.closest<HTMLElement>("[data-line]");
-    let pos: number;
-    if (!block) pos = body.length;
-    else {
-      // Exactly where the tap landed; failing that, the end of the tapped block.
-      const exact = sourceOffsetFromTap(block, e.clientX, e.clientY, body);
-      if (exact !== null) pos = exact;
-      else {
-        let line = Number(block.dataset.lineEnd ?? block.dataset.line);
-        const lines = body.split("\n");
-        while (line > Number(block.dataset.line) && !lines[line]?.trim()) line--;
-        pos = 0;
-        for (let i = 0; i < line && i < lines.length; i++) pos += lines[i].length + 1;
-        pos += lines[line]?.length ?? 0;
-      }
-    }
-    // Switch to the editor synchronously, inside the tap, so iOS raises the keyboard.
-    flushSync(() => {
-      pendingCaret.current = { pos, y: e.clientY };
-      setMode("edit");
-    });
-  };
-
-  const insert = (text: string, replaceFrom?: number) => {
-    const el = bodyRef.current!;
-    if (replaceFrom !== undefined) el.setSelectionRange(replaceFrom, el.selectionEnd);
-    // execCommand keeps the native undo stack; fall back if it's unavailable.
-    if (!document.execCommand("insertText", false, text)) {
-      el.setRangeText(text, el.selectionStart, el.selectionEnd, "end");
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-    }
-  };
-
-  const onBodyKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-      e.preventDefault();
-      close();
-      return;
-    }
-    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
-    const el = e.currentTarget;
-    if (el.selectionStart !== el.selectionEnd) return;
-    const pos = el.selectionStart;
-    const lineStart = el.value.lastIndexOf("\n", pos - 1) + 1;
-    const line = el.value.slice(lineStart, pos);
-    const m = LIST_RE.exec(line);
-    if (!m) return;
-    e.preventDefault();
-    if (line.length === m[0].length) {
-      insert("", lineStart); // empty item: end the list
-      return;
-    }
-    const [, indent, bullet, num, delim, task] = m;
-    const marker = num ? `${Number(num) + 1}${delim}` : bullet;
-    insert(`\n${indent}${marker} ${task ? "[ ] " : ""}`);
+  /** Put the cursor in the note body at `pos` (default: the end). */
+  const focusBody = (pos?: number) => {
+    const v = view.current;
+    if (!v) return;
+    v.focus();
+    const at = Math.min(pos ?? v.state.doc.length, v.state.doc.length);
+    v.dispatch({ selection: { anchor: at }, scrollIntoView: true });
   };
 
   const addLink = async () => {
-    const el = mode === "edit" ? bodyRef.current : null;
-    const start = el ? el.selectionStart : body.length;
-    const end = el ? el.selectionEnd : body.length;
-    const selected = el ? el.value.slice(start, end) : "";
+    const v = view.current;
+    if (!v) return;
+    const focused = v.hasFocus;
+    const { from, to } = focused ? v.state.selection.main : { from: v.state.doc.length, to: v.state.doc.length };
+    const selected = v.state.sliceDoc(from, to);
     const selIsUrl = /^\s*(https?:\/\/|www\.)\S+\s*$/i.test(selected);
     const res = await linkPrompt({ text: selIsUrl ? "" : selected.trim(), url: selIsUrl ? selected.trim() : "" });
     if (!res) {
-      el?.focus();
+      if (focused) v.focus();
       return;
     }
-    const md = markdownLink(res.text, res.url);
-    if (el) {
-      el.focus();
-      el.setSelectionRange(start, end);
-      insert(md);
-    } else {
-      const next = body.replace(/\s*$/, "") + (body.trim() ? "\n" : "") + md;
-      setBody(next);
-      save({ body: next });
-    }
+    let md = markdownLink(res.text, res.url);
+    // Appending to a note that wasn't being edited: start the link on its own line.
+    if (!focused && v.state.doc.length && !v.state.doc.toString().endsWith("\n")) md = "\n" + md;
+    v.dispatch({ changes: { from, to, insert: md }, selection: { anchor: from + md.length }, scrollIntoView: true });
+    v.focus();
   };
   const addLinkRef = useRef(addLink);
   useLayoutEffect(() => {
@@ -300,25 +196,25 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
     return () => window.removeEventListener("keydown", onKey);
   }, [picking]);
 
+  /** Toggle "- [ ] " on the current line; if the note isn't being edited, add a new checklist item at the end. */
   const toggleChecklist = () => {
-    if (mode === "preview") {
-      const next = body.replace(/\s*$/, "") + (body.trim() ? "\n" : "") + "- [ ] ";
-      setBody(next);
-      save({ body: next });
-      enterEdit(next.length);
+    const v = view.current;
+    if (!v) return;
+    if (!v.hasFocus) {
+      const doc = v.state.doc.toString();
+      const insert = (doc && !doc.endsWith("\n") ? "\n" : "") + "- [ ] ";
+      v.dispatch({ changes: { from: doc.length, insert }, selection: { anchor: doc.length + insert.length }, scrollIntoView: true });
+      v.focus();
       return;
     }
-    const el = bodyRef.current!;
-    const pos = el.selectionStart;
-    const lineStart = el.value.lastIndexOf("\n", pos - 1) + 1;
-    let lineEnd = el.value.indexOf("\n", pos);
-    if (lineEnd < 0) lineEnd = el.value.length;
-    const line = el.value.slice(lineStart, lineEnd);
-    const m = /^(\s*)[-*+]\s+\[[ xX]\]\s+/.exec(line) ?? /^(\s*)[-*+]\s+\[[ xX]\]$/.exec(line);
-    el.focus();
-    el.setSelectionRange(lineStart, lineEnd);
-    const plainLine = line.replace(/^(\s*)[-*+]\s+/, "$1");
-    insert(m ? line.slice(m[0].length) : `${line.match(/^\s*/)![0]}- [ ] ${plainLine.trimStart()}`);
+    const line = v.state.doc.lineAt(v.state.selection.main.head);
+    const task = /^(\s*)[-*+]\s+\[[ xX]\]\s?/.exec(line.text);
+    const plain = /^(\s*)(?:[-*+]\s+)?/.exec(line.text)!;
+    const change = task
+      ? { from: line.from + task[1].length, to: line.from + task[0].length, insert: "" }
+      : { from: line.from + plain[1].length, to: line.from + plain[0].length, insert: "- [ ] " };
+    v.dispatch({ changes: change });
+    v.focus();
   };
 
   const n = note;
@@ -433,30 +329,22 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
-                enterEdit(0);
+                focusBody(0);
               }
             }}
           />
-          {mode === "edit" ? (
-            <textarea
-              ref={bodyRef}
-              className="editor-body"
-              dir="auto"
-              placeholder="Note"
-              value={body}
-              onChange={(e) => {
-                setBody(e.target.value);
-                save({ body: e.target.value });
-              }}
-              onKeyDown={onBodyKey}
-            />
-          ) : (
-            <div
-              className={`editor-preview md${body ? "" : " empty-preview"}`}
-              onClick={onPreviewClick}
-              dangerouslySetInnerHTML={{ __html: body ? html : "<p>Note</p>" }}
-            />
-          )}
+          <NoteBody
+            initial={initialBody}
+            onChange={(text) => {
+              setBody(text);
+              save({ body: text });
+            }}
+            onWikilink={onWikilink}
+            onModEnter={() => close()}
+            onReady={(v) => {
+              view.current = v;
+            }}
+          />
         </div>
 
         <div className="editor-bottom">
@@ -467,7 +355,12 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
           <button className="when" onClick={() => setShowCreated((s) => !s)}>
             {n ? (showCreated ? `Created ${longDate(n.createdAt)}` : `Edited ${longDate(n.updatedAt)}`) : ""}
           </button>
-          <button className="icon-btn" aria-label="Checklist item" onClick={toggleChecklist}>
+          <button
+            className="icon-btn"
+            aria-label="Checklist item"
+            onMouseDown={(e) => e.preventDefault()} // keep the cursor in the note
+            onClick={toggleChecklist}
+          >
             <CheckboxIcon />
           </button>
           <button
@@ -478,13 +371,6 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
             onClick={addLink}
           >
             <LinkIcon />
-          </button>
-          <button
-            className="icon-btn"
-            aria-label={mode === "edit" ? "Preview" : "Edit"}
-            onClick={() => (mode === "edit" ? setMode("preview") : enterEdit(null))}
-          >
-            {mode === "edit" ? <EyeIcon /> : <EditIcon />}
           </button>
         </div>
       </div>

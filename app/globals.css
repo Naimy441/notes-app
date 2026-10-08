@@ -1257,37 +1257,23 @@ mark.hit {
   overflow: hidden;
   padding: 6px 0;
 }
-.editor-title::placeholder,
-.editor-body::placeholder {
+.editor-title::placeholder {
   color: var(--muted);
 }
-.editor-body {
-  width: 100%;
-  resize: none;
-  background: transparent;
-  outline: none;
-  font-size: 16px;
-  line-height: 1.6;
-  color: var(--text);
-  overflow: hidden;
+/* The note body (CodeMirror live preview; most styling lives in lib/livePreview.ts). */
+.note-body {
   min-height: 40vh;
-  padding: 4px 0;
+}
+.note-body .cm-editor {
   font-family: var(--font);
-  /* Each line lays out by its own direction (Arabic lines become RTL while typing). */
-  unicode-bidi: plaintext;
-  text-align: start;
 }
-.editor-preview {
-  font-size: 16px;
-  line-height: 1.6;
-  color: var(--text);
-  min-height: 30vh;
-  padding: 4px 0;
-  cursor: text;
-  overflow-wrap: anywhere;
+.note-body .cm-content {
+  -webkit-user-select: text;
+  user-select: text;
 }
-.editor-preview.empty-preview {
-  color: var(--muted);
+.note-body ::selection,
+.note-body .cm-content ::selection {
+  background: var(--accent-soft);
 }
 .editor-bottom {
   display: flex;

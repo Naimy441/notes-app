@@ -13,6 +13,13 @@
     "notes:push": "node scripts/push-notes.mjs"
   },
   "dependencies": {
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/language": "^6.13.1",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.14",
+    "@lezer/highlight": "^1.2.5",
+    "@lezer/markdown": "^1.8.0",
     "firebase": "^13.0.0",
     "markdown-it": "^15.0.2",
     "next": "16.4.0",
