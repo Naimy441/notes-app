@@ -1,0 +1,7 @@
+# Never upload secrets or local-only files to Vercel
+*-firebase-adminsdk-*.json
+service-account*.json
+.env*.local
+.claude
+.firebase
+*-debug.log

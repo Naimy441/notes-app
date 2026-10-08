@@ -6,9 +6,17 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "sync": "node scripts/obsidian-sync.mjs",
+    "sync:watch": "node scripts/obsidian-sync.mjs --watch",
+    "sync:install": "node scripts/obsidian-sync.mjs --install",
+    "sync:uninstall": "node scripts/obsidian-sync.mjs --uninstall",
+    "emulators": "firebase emulators:start --only auth,firestore --project note-d7ce7",
+    "dev:emulators": "NEXT_PUBLIC_USE_EMULATORS=1 next dev"
   },
   "dependencies": {
+    "firebase": "^13.0.0",
+    "markdown-it": "^15.0.2",
     "next": "16.4.0",
     "react": "19.3.0",
     "react-dom": "19.3.0"
@@ -20,7 +28,9 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.4.0",
+    "firebase-admin": "^13.10.0",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "yaml": "^2.9.1"
   }
 }
