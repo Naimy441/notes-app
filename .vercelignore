@@ -5,3 +5,7 @@ service-account*.json
 .claude
 .firebase
 *-debug.log
+
+# downloaded notes and push backups (personal data)
+/notes/
+/.notes-backups/

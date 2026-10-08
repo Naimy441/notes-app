@@ -257,6 +257,36 @@ button {
   color: var(--muted);
 }
 
+.topbar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.topbar-row .searchbar {
+  flex: 1;
+  min-width: 0;
+}
+@media (min-width: 1024px) {
+  /* Same columns as the page below, so search sits centered over the notes. */
+  .topbar {
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .topbar-row {
+    display: grid;
+    grid-template-columns: 264px minmax(0, 1fr);
+    gap: 0;
+  }
+  .topbar-brand {
+    padding: 0 20px;
+    align-items: center;
+  }
+  .topbar-row .searchbar {
+    width: calc(100% - 2 * var(--pad));
+    margin: 0 auto;
+  }
+}
+
 .avatar {
   width: 32px;
   height: 32px;
@@ -268,44 +298,6 @@ button {
   place-items: center;
   font-weight: 700;
   font-size: 14px;
-}
-
-.tabs {
-  position: relative;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  max-width: 320px;
-  margin: 10px auto 0;
-  padding: 3px;
-  border-radius: 999px;
-  background: var(--field);
-}
-.tabs button {
-  position: relative;
-  z-index: 1;
-  height: 32px;
-  border-radius: 999px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--muted);
-  transition: color 0.2s;
-}
-.tabs button[aria-selected="true"] {
-  color: var(--text);
-}
-.tabs .pill {
-  position: absolute;
-  top: 3px;
-  bottom: 3px;
-  left: 3px;
-  width: calc(50% - 3px);
-  border-radius: 999px;
-  background: var(--card);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
-  transition: transform 0.35s var(--ease-spring);
-}
-.tabs[data-active="1"] .pill {
-  transform: translateX(100%);
 }
 
 .layout {
@@ -336,11 +328,9 @@ main.content {
     padding: 8px 10px 24px;
     scrollbar-width: thin;
   }
-  .tabs {
-    display: none;
-  }
   .fab {
-    display: none !important;
+    right: 32px;
+    bottom: 32px;
   }
 }
 
@@ -356,6 +346,42 @@ main.content {
   margin-top: 8px;
 }
 
+.section-count {
+  margin-left: 7px;
+  font-weight: 600;
+  opacity: 0.7;
+}
+.section-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 18px 4px 10px;
+}
+.section-row:first-child {
+  margin-top: 8px;
+}
+.section-row .section-label {
+  margin: 0;
+}
+.section-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px 4px 2px;
+  margin-left: -2px;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+.section-toggle:hover {
+  background: var(--field);
+}
+.section-toggle svg {
+  transition: transform 0.25s var(--ease);
+}
+.section-toggle svg.open {
+  transform: rotate(90deg);
+}
 .crumbs {
   display: flex;
   align-items: center;
@@ -417,38 +443,6 @@ main.content {
 }
 .empty svg {
   opacity: 0.35;
-}
-
-/* "Take a note…" bar on desktop */
-.composer {
-  display: none;
-}
-@media (min-width: 1024px) {
-  .composer {
-    display: flex;
-    align-items: center;
-    width: 100%;
-    max-width: 600px;
-    margin: 14px auto 8px;
-    height: 48px;
-    padding: 0 6px 0 18px;
-    border-radius: 12px;
-    background: var(--card);
-    border: 1px solid var(--border);
-    box-shadow: var(--card-shadow-hover);
-    color: var(--muted);
-    font-size: 15px;
-    font-weight: 500;
-    cursor: text;
-    transition: transform 0.2s var(--ease);
-  }
-  .composer:hover {
-    transform: translateY(-1px);
-  }
-  .composer span {
-    flex: 1;
-    text-align: left;
-  }
 }
 
 /* ───────────────────────── masonry + note cards ───────────────────────── */
@@ -540,7 +534,24 @@ main.content {
   padding: 2px 8px;
   min-width: 0;
   flex-shrink: 1;
+  text-overflow: clip;
 }
+.chip-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* Names too long for the card fade out at the edge instead of being cut. */
+.chip-text.fade {
+  mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+}
+[dir="rtl"] .chip-text.fade,
+.chip-text.fade:dir(rtl) {
+  mask-image: linear-gradient(to left, #000 calc(100% - 18px), transparent);
+  -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 18px), transparent);
+}
+
 .card-meta time {
   margin-left: auto;
   flex: none;
@@ -613,7 +624,22 @@ main.content {
 }
 .md ul,
 .md ol {
-  padding-left: 1.3em;
+  padding-inline-start: 1.3em;
+}
+/* One line of a multi-line paragraph, with its own text direction. */
+.md .ln {
+  display: block;
+}
+.md p,
+.md li,
+.md h1,
+.md h2,
+.md h3,
+.md h4,
+.md h5,
+.md h6,
+.md blockquote {
+  text-align: start;
 }
 .md ul {
   list-style: disc;
@@ -633,7 +659,7 @@ main.content {
 }
 .md ul.has-tasks {
   list-style: none;
-  padding-left: 0.1em;
+  padding-inline-start: 0.1em;
 }
 .md li.task {
   display: flex;
@@ -642,6 +668,10 @@ main.content {
 }
 .md li.task > p {
   margin: 0;
+}
+.md .task-text {
+  flex: 1;
+  min-width: 0;
 }
 .md li.task.done {
   color: var(--muted);
@@ -715,8 +745,8 @@ main.content {
   font-size: 0.85em;
 }
 .md blockquote {
-  border-left: 3px solid var(--border-strong);
-  padding-left: 0.8em;
+  border-inline-start: 3px solid var(--border-strong);
+  padding-inline-start: 0.8em;
   color: var(--muted);
 }
 .md hr {
@@ -835,6 +865,8 @@ mark.hit {
   white-space: pre-line;
   overflow-wrap: anywhere;
   pointer-events: none;
+  unicode-bidi: plaintext;
+  text-align: start;
 }
 .thumb .mini b {
   display: block;
@@ -1090,6 +1122,14 @@ mark.hit {
     box-shadow 0.2s;
   animation: fab-in 0.5s var(--ease-spring) both 0.15s;
 }
+@media (hover: hover) {
+  .fab:hover {
+    transform: translateY(-2px) scale(1.04);
+    box-shadow:
+      0 10px 28px rgb(0 0 0 / 0.22),
+      0 3px 8px rgb(0 0 0 / 0.12);
+  }
+}
 .fab:active {
   transform: scale(0.9);
 }
@@ -1233,6 +1273,9 @@ mark.hit {
   min-height: 40vh;
   padding: 4px 0;
   font-family: var(--font);
+  /* Each line lays out by its own direction (Arabic lines become RTL while typing). */
+  unicode-bidi: plaintext;
+  text-align: start;
 }
 .editor-preview {
   font-size: 16px;

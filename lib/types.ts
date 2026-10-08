@@ -11,9 +11,9 @@ export interface Note {
   createdAt: number;
   /** ms since epoch; also the last-writer-wins version */
   updatedAt: number;
-  /** Vault-relative file path, owned by the Obsidian sync script. */
+  /** Original file path from the import (used to resolve [[wikilinks]]). */
   path?: string | null;
-  /** Extra YAML frontmatter preserved from Obsidian (tags stripped). */
+  /** Extra YAML frontmatter preserved from the import. */
   fm?: string | null;
 }
 

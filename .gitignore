@@ -50,3 +50,7 @@ service-account*.json
 
 # local tooling
 .claude/
+
+# downloaded notes and push backups (personal data)
+/notes/
+/.notes-backups/

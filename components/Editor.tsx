@@ -100,7 +100,7 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
   const pendingCaret = useRef<number | null>(null);
   const kb = useVisualViewport(sheet);
 
-  // Pull in remote edits (e.g. from Obsidian) unless the user is typing in that field.
+  // Pull in edits from other devices unless the user is typing in that field.
   const remoteBody = note?.body;
   const remoteTitle = note?.title;
   useEffect(() => {
@@ -402,6 +402,7 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
           <textarea
             ref={titleRef}
             className="editor-title"
+            dir="auto"
             placeholder="Title"
             rows={1}
             value={title}
@@ -422,6 +423,7 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
             <textarea
               ref={bodyRef}
               className="editor-body"
+              dir="auto"
               placeholder="Note"
               value={body}
               onChange={(e) => {

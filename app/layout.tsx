@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Notes",
-  description: "My notes, synced with Obsidian.",
+  description: "My notes, everywhere.",
   applicationName: "Notes",
   appleWebApp: { capable: true, title: "Notes", statusBarStyle: "black-translucent" },
   formatDetection: { telephone: false },

@@ -5,7 +5,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { flushSync } from "react-dom";
 import { baseName, buildFolderTree, byDate, countSubfolders, makeHue, parentOf, recentInFolder, searchFolders, searchNotes, searchTerms } from "@/lib/derive";
 import { clearFrozen, freeze, useFrozen } from "@/lib/freeze";
-import { usePrefs } from "@/lib/prefs";
+import { setPref, usePrefs } from "@/lib/prefs";
 import { back, navigate, useRoute, type Route } from "@/lib/router";
 import { createFolder, deleteFolder, getState, purgeNotes, renameFolder, updateNote, useStore, type StoreState } from "@/lib/store";
 import type { FolderNode, Note } from "@/lib/types";
@@ -285,9 +285,6 @@ export function Shell({ user, onSignOut }: Props) {
   } else if (route.view === "notes") {
     content = (
       <>
-        <button className="composer" onClick={() => newNote()}>
-          <span>Take a note…</span>
-        </button>
         <PinnedAndOthers notes={live} resetKey="notes" showFolder gridProps={gridProps} empty="Notes you add appear here" />
       </>
     );
@@ -346,14 +343,14 @@ export function Shell({ user, onSignOut }: Props) {
   return (
     <div className="shell">
       <header className={`topbar${scrolled ? " scrolled" : ""}`}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div className="brand desk-only" style={{ width: 248, padding: "0 6px", flex: "none" }}>
+        <div className="topbar-row">
+          <div className="brand desk-only topbar-brand">
             <div className="brand-mark">
               <BrandGlyph size={19} />
             </div>
             Notes
           </div>
-          <div className="searchbar" style={{ flex: 1 }}>
+          <div className="searchbar">
             {searching ? (
               <button className="icon-btn" aria-label="Close search" onClick={() => back({ q: null })}>
                 <BackIcon />
@@ -371,6 +368,7 @@ export function Shell({ user, onSignOut }: Props) {
             <input
               ref={searchInput}
               type="search"
+              dir="auto"
               placeholder="Search your notes"
               value={route.q ?? ""}
               onFocus={() => route.q === null && navigate({ q: "" })}
@@ -395,27 +393,7 @@ export function Shell({ user, onSignOut }: Props) {
               <SyncBadge store={store} />
             )}
           </div>
-          <div className="desk-only" style={{ width: 248, flex: "none" }} />
         </div>
-        {!searching && (
-          <div className="tabs" role="tablist" data-active={route.view === "folders" ? 1 : 0}>
-            <div className="pill" />
-            <button
-              role="tab"
-              aria-selected={route.view === "notes"}
-              onClick={() => route.view !== "notes" && navigate({ view: "notes", note: null }, { replace: true })}
-            >
-              Notes
-            </button>
-            <button
-              role="tab"
-              aria-selected={route.view === "folders"}
-              onClick={() => (route.view !== "folders" || route.folder) && navigate({ view: "folders", folder: "", note: null }, { replace: route.view !== "folders" })}
-            >
-              Folders
-            </button>
-          </div>
-        )}
       </header>
 
       <div className="layout">
@@ -504,18 +482,40 @@ function PinnedAndOthers({
 }) {
   const pinned = useMemo(() => notes.filter((n) => n.pinned), [notes]);
   const others = useMemo(() => notes.filter((n) => !n.pinned), [notes]);
+  const { pinnedCollapsed } = usePrefs();
   if (!notes.length) return empty ? <Empty icon={<NotesIcon size={72} />} text={empty} /> : null;
+  // Folding is only offered when there are other notes to jump to.
+  const folded = pinnedCollapsed && others.length > 0;
+  const toggle = () => {
+    setPref("pinnedCollapsed", !folded);
+    window.scrollTo({ top: 0 });
+  };
   return (
     <>
       {pinned.length > 0 && (
         <>
-          <div className="section-label">Pinned</div>
-          <NoteGrid notes={pinned} resetKey={resetKey + ":p"} showFolder={showFolder} {...gridProps} />
+          <div className="section-row">
+            <button
+              className="section-label section-toggle"
+              onClick={others.length ? toggle : undefined}
+              aria-expanded={!folded}
+              title={others.length ? (folded ? "Show pinned notes" : "Fold pinned notes") : undefined}
+            >
+              {others.length > 0 && <ChevronRightIcon size={14} className={folded ? "" : "open"} />}
+              Pinned
+              <span className="section-count">{pinned.length}</span>
+            </button>
+          </div>
+          {!folded && <NoteGrid notes={pinned} resetKey={resetKey + ":p"} showFolder={showFolder} {...gridProps} />}
         </>
       )}
       {others.length > 0 && (
         <>
-          {pinned.length > 0 && <div className="section-label">Others</div>}
+          {pinned.length > 0 && (
+            <div className="section-label">
+              Others<span className="section-count">{others.length}</span>
+            </div>
+          )}
           <NoteGrid notes={others} resetKey={resetKey + ":o"} showFolder={showFolder} {...gridProps} />
         </>
       )}

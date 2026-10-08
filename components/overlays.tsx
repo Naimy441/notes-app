@@ -192,6 +192,7 @@ function DialogView({ d, close }: { d: Dialog; close: () => void }) {
             <input
               value={text}
               placeholder="Text to show (optional)"
+              dir="auto"
               onChange={(e) => setText(e.target.value)}
               style={{ marginTop: 10 }}
               enterKeyHint="done"
@@ -203,6 +204,7 @@ function DialogView({ d, close }: { d: Dialog; close: () => void }) {
             ref={input}
             value={value}
             placeholder={d.placeholder}
+            dir="auto"
             onChange={(e) => setValue(e.target.value)}
             autoCapitalize="words"
             enterKeyHint="done"

@@ -64,7 +64,7 @@ function SignIn({ error }: { error: string | null }) {
           <BrandGlyph size={52} />
         </div>
         <h1>Notes</h1>
-        <p>Your notes, everywhere — synced with Obsidian.</p>
+        <p>Your notes, everywhere.</p>
         <button
           className="gbtn"
           disabled={busy}

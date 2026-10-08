@@ -6,17 +6,61 @@ const md = new MarkdownIt({ html: false, linkify: true, breaks: true, typographe
 const escapeAttr = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-// Tag every block with its source line so a tap in preview can place the caret there.
+// Blocks whose text direction should follow their content (Arabic → RTL), like Keep did.
+const DIR_AUTO = new Set([
+  "paragraph_open",
+  "heading_open",
+  "bullet_list_open",
+  "ordered_list_open",
+  "list_item_open",
+  "blockquote_open",
+  "th_open",
+  "td_open",
+]);
+
+// Tag every block with its source line so a tap in preview can place the caret there,
+// and let each block pick its own text direction.
 md.core.ruler.push("source_lines", (state: StateCore) => {
   for (const t of state.tokens) {
     if (t.map && t.nesting === 1) {
       t.attrSet("data-line", String(t.map[0]));
       t.attrSet("data-line-end", String(t.map[1] - 1));
     }
+    if (DIR_AUTO.has(t.type)) t.attrSet("dir", "auto");
   }
 });
 
-// GitHub/Obsidian task lists: "- [ ] item" / "- [x] item".
+// Keep notes put several lines in one paragraph; give each line its own direction so an
+// English line followed by an Arabic one aligns each correctly. Only splits at line breaks
+// that aren't inside formatting (e.g. **bold across\nlines** stays a normal <br>).
+md.core.ruler.push("bidi_lines", (state: StateCore) => {
+  for (const t of state.tokens) {
+    const kids = t.children;
+    if (t.type !== "inline" || !kids?.some((k) => k.type === "softbreak")) continue;
+    // Task items are [checkbox, <span task-text>, …text…, </span>]; only split the text.
+    const isTask = kids[0]?.type === "html_inline" && kids[0].content.startsWith('<input type="checkbox"');
+    const from = isTask ? 2 : 0;
+    const to = isTask ? kids.length - 1 : kids.length;
+    let depth = 0;
+    const splits = new Set<number>();
+    for (let i = from; i < to; i++) {
+      if (kids[i].type === "softbreak" && depth === 0) splits.add(i);
+      depth += kids[i].nesting;
+    }
+    if (!splits.size) continue;
+    const open = () => Object.assign(new state.Token("html_inline", "", 0), { content: '<span class="ln" dir="auto">' });
+    const close = () => Object.assign(new state.Token("html_inline", "", 0), { content: "</span>" });
+    const out = [...kids.slice(0, from), open()];
+    for (let i = from; i < to; i++) {
+      if (splits.has(i)) out.push(close(), open());
+      else out.push(kids[i]);
+    }
+    out.push(close(), ...kids.slice(to));
+    t.children = out;
+  }
+});
+
+// Task lists: "- [ ] item" / "- [x] item".
 md.core.ruler.after("inline", "task_lists", (state: StateCore) => {
   const toks = state.tokens;
   for (let i = 2; i < toks.length; i++) {
@@ -30,19 +74,23 @@ md.core.ruler.after("inline", "task_lists", (state: StateCore) => {
     const line = toks[i - 2].map?.[0] ?? 0;
     const cb = new state.Token("html_inline", "", 0);
     cb.content = `<input type="checkbox" class="task-cb" data-task-line="${line}"${checked ? " checked" : ""} tabindex="-1">`;
-    t.children!.unshift(cb);
+    // Wrap the item's text in one box so it lays out as a single column next to the checkbox.
+    const textOpen = Object.assign(new state.Token("html_inline", "", 0), { content: '<span class="task-text">' });
+    const textClose = Object.assign(new state.Token("html_inline", "", 0), { content: "</span>" });
+    t.children!.unshift(cb, textOpen);
+    t.children!.push(textClose);
     toks[i - 2].attrJoin("class", checked ? "task done" : "task");
     // Mark the parent list so bullets can be hidden.
     for (let j = i - 3; j >= 0; j--) {
       if ((toks[j].type === "bullet_list_open" || toks[j].type === "ordered_list_open") && toks[j].level === toks[i - 2].level - 1) {
-        toks[j].attrJoin("class", "has-tasks");
+        if (!String(toks[j].attrGet("class") ?? "").includes("has-tasks")) toks[j].attrJoin("class", "has-tasks");
         break;
       }
     }
   }
 });
 
-// Obsidian wikilinks: [[Target]] or [[Target|Alias]].
+// Wikilinks (from the original import): [[Target]] or [[Target|Alias]].
 md.inline.ruler.before("link", "wikilink", (state: StateInline, silent: boolean) => {
   const src = state.src;
   const start = state.pos;

@@ -6,9 +6,11 @@ import type { SortKey, ThemePref } from "./types";
 interface Prefs {
   theme: ThemePref;
   sort: SortKey;
+  /** Pinned section folded away so the other notes come first. */
+  pinnedCollapsed: boolean;
 }
 
-const DEFAULTS: Prefs = { theme: "system", sort: "updatedAt" };
+const DEFAULTS: Prefs = { theme: "system", sort: "updatedAt", pinnedCollapsed: false };
 
 function read(): Prefs {
   if (typeof window === "undefined") return DEFAULTS;

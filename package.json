@@ -7,12 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "sync": "node scripts/obsidian-sync.mjs",
-    "sync:watch": "node scripts/obsidian-sync.mjs --watch",
-    "sync:install": "node scripts/obsidian-sync.mjs --install",
-    "sync:uninstall": "node scripts/obsidian-sync.mjs --uninstall",
     "emulators": "firebase emulators:start --only auth,firestore --project note-d7ce7",
-    "dev:emulators": "NEXT_PUBLIC_USE_EMULATORS=1 next dev"
+    "dev:emulators": "NEXT_PUBLIC_USE_EMULATORS=1 next dev",
+    "notes:download": "node scripts/download-notes.mjs",
+    "notes:push": "node scripts/push-notes.mjs"
   },
   "dependencies": {
     "firebase": "^13.0.0",

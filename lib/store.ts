@@ -145,6 +145,7 @@ export function loadCache() {
 }
 
 let unsubs: Unsubscribe[] = [];
+let foldersReconciled = false;
 
 /** Start realtime sync. Only fetches docs changed since the newest one cached. */
 export async function startSync() {
@@ -178,6 +179,8 @@ export async function startSync() {
         if (!snap.metadata.fromCache && !state.serverSynced) {
           state.serverSynced = true;
           changed = true;
+          // Only now does the cache hold every doc the server has added; compare after that.
+          reconcile("notes", state.notes, ingestNote).catch((e) => console.warn("reconcile notes", e));
         }
         if (state.error) {
           state.error = null;
@@ -189,10 +192,15 @@ export async function startSync() {
     ),
     onSnapshot(
       query(collection(db, "folders"), where("syncedAt", ">=", folderSince)),
+      { includeMetadataChanges: true },
       (snap) => {
         for (const ch of snap.docChanges()) {
           if (ch.type === "removed" || ch.doc.metadata.hasPendingWrites) continue;
           ingestFolder(ch.doc);
+        }
+        if (!snap.metadata.fromCache && !foldersReconciled) {
+          foldersReconciled = true;
+          reconcile("folders", state.folders, ingestFolder).catch((e) => console.warn("reconcile folders", e));
         }
         emit();
       },
@@ -202,9 +210,6 @@ export async function startSync() {
 
   // Writes queued in a previous session (e.g. made offline) still count as pending.
   trackPending(waitForPendingWrites(db));
-
-  reconcile("notes", state.notes, ingestNote).catch((e) => console.warn("reconcile notes", e));
-  reconcile("folders", state.folders, ingestFolder).catch((e) => console.warn("reconcile folders", e));
 }
 
 /**
@@ -282,7 +287,7 @@ function flushNote(id: string) {
   writeTimers.delete(id);
   const n = state.notes.get(id);
   if (!n) return;
-  // `path` and `fm` belong to the Obsidian sync script; merge leaves them intact.
+  // `path` and `fm` are kept from the original import; merge leaves them intact.
   trackPending(
     setDoc(
       doc(getDb(), "notes", id),

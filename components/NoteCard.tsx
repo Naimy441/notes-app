@@ -78,7 +78,7 @@ export const NoteCard = memo(function NoteCard({ note, index, animate, showFolde
       >
         {note.pinned ? <PinFilledIcon size={18} /> : <PinIcon size={18} />}
       </button>
-      {note.title && <h3 className="card-title">{termKey ? <Highlighted text={note.title} terms={terms!} /> : note.title}</h3>}
+      {note.title && <h3 className="card-title" dir="auto">{termKey ? <Highlighted text={note.title} terms={terms!} /> : note.title}</h3>}
       <div
         ref={bodyRef}
         className={`card-body md${clipped ? " clipped" : ""}`}
@@ -87,9 +87,11 @@ export const NoteCard = memo(function NoteCard({ note, index, animate, showFolde
       />
       <footer className="card-meta">
         {showFolder && note.folder && (
-          <span className="chip">
+          <span className="chip" title={note.folder}>
             <FolderIcon size={12} />
-            {baseName(note.folder)}
+            <span className="chip-text" ref={fadeWhenOverflowing}>
+              {baseName(note.folder)}
+            </span>
           </span>
         )}
         <time>{shortDate(note[dateKey])}</time>
@@ -97,6 +99,18 @@ export const NoteCard = memo(function NoteCard({ note, index, animate, showFolde
     </article>
   );
 });
+
+// One shared observer for every card's folder name: fade it only when it doesn't fit.
+let overflowObserver: ResizeObserver | null = null;
+const checkOverflow = (el: Element) => el.classList.toggle("fade", el.scrollWidth > el.clientWidth + 1);
+
+function fadeWhenOverflowing(el: HTMLSpanElement | null) {
+  if (!el || typeof ResizeObserver === "undefined") return;
+  overflowObserver ??= new ResizeObserver((entries) => entries.forEach((e) => checkOverflow(e.target)));
+  overflowObserver.observe(el);
+  checkOverflow(el);
+  return () => overflowObserver?.unobserve(el);
+}
 
 function Highlighted({ text, terms }: { text: string; terms: string[] }) {
   const re = new RegExp(`(${terms.map(escapeRe).join("|")})`, "gi");

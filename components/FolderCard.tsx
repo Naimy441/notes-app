@@ -44,7 +44,7 @@ export const FolderCard = memo(function FolderCard({ path, name, hue, total, sub
           return n ? (
             <div className="thumb" key={n.id}>
               <div className="mini">
-                {n.title && <b>{n.title}</b>}
+                {n.title && <b dir="auto">{n.title}</b>}
                 {plain(n.body)}
               </div>
             </div>
@@ -60,7 +60,7 @@ export const FolderCard = memo(function FolderCard({ path, name, hue, total, sub
         )}
       </div>
       <div className="fmeta">
-        <div className="fname">{name}</div>
+        <div className="fname" dir="auto">{name}</div>
         <div className="fcount">
           <FolderIcon size={15} />
           {total} {total === 1 ? "note" : "notes"}

@@ -4,7 +4,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "Notes",
     short_name: "Notes",
-    description: "My notes, synced with Obsidian.",
+    description: "My notes, everywhere.",
     start_url: "/",
     scope: "/",
     display: "standalone",
