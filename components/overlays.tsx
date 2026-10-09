@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { setEditSurface } from "./NoteBody";
 
 // A tiny imperative overlay system: toast(), menu(), prompt(), confirm().
 
@@ -206,11 +207,10 @@ function DialogView({ d, close }: { d: Dialog; close: () => void }) {
   };
   useEffect(() => {
     if (!multiline) return;
-    // One editing surface while the prompt is open. A second text field
-    // (the note title or body) is enough for iOS to bring the accessory back.
-    const nodes = [...document.querySelectorAll<HTMLElement>(".editor-title, .cm-content")];
-    nodes.forEach((n) => n.setAttribute("contenteditable", "false"));
-    return () => nodes.forEach((n) => n.setAttribute("contenteditable", "true"));
+    // The prompt is the only element with an editable style. Turning the note
+    // fields back on here would give iOS a second and third assistable target.
+    setEditSurface("none");
+    return () => setEditSurface("none");
   }, [multiline]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && finish(false);
@@ -219,9 +219,9 @@ function DialogView({ d, close }: { d: Dialog; close: () => void }) {
   });
   return createPortal(
     <div ref={backdrop} className="sheet-backdrop" style={{ alignItems: "center" }} onClick={() => finish(false)}>
-      {/* A textarea or input inside a form is what makes iOS draw the
-          prev/next/checkmark bar. The multiline prompt is a contenteditable
-          div, and it is not a form. */}
+      {/* Not a form, and not an input or textarea. Those are InputType::Text /
+          TextArea, which always get the accessory on iPhone. This is the only
+          element left with an editable style while the prompt is open. */}
       {multiline ? (
         <div className="dialog" role="dialog" aria-label={d.kind === "prompt" ? d.title : "Edit"} onClick={(e) => e.stopPropagation()}>
           <h3>{d.kind === "prompt" ? d.title : ""}</h3>
@@ -234,6 +234,8 @@ function DialogView({ d, close }: { d: Dialog; close: () => void }) {
             data-placeholder={d.kind === "prompt" ? d.placeholder : undefined}
             dir="auto"
             spellCheck={false}
+            autoCorrect="off"
+            autoCapitalize="off"
             suppressContentEditableWarning
             onPaste={(e) => {
               e.preventDefault();

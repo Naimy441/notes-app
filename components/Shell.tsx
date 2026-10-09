@@ -9,7 +9,7 @@ import { setPref, usePrefs } from "@/lib/prefs";
 import { back, navigate, useRoute, type Route } from "@/lib/router";
 import { createFolder, deleteFolder, getState, purgeNotes, renameFolder, updateNote, useStore, type StoreState } from "@/lib/store";
 import type { FolderNode, Note } from "@/lib/types";
-import { canMorphNote, canVT, quiet } from "@/lib/vt";
+import { canMorphNote, morphSheetToCard, quiet } from "@/lib/vt";
 import { Editor } from "./Editor";
 import { FolderCard } from "./FolderCard";
 import { FolderPicker } from "./FolderPicker";
@@ -95,6 +95,7 @@ export function Shell({ user, onSignOut }: Props) {
     return () => {
       document.body.classList.remove("locked");
       document.body.style.top = "";
+      document.body.style.height = "";
       document.documentElement.classList.remove("note-open");
       document.documentElement.style.removeProperty("--lock-y");
       window.scrollTo(0, y);
@@ -128,29 +129,60 @@ export function Shell({ user, onSignOut }: Props) {
   const closeEditor = useCallback(() => {
     flushSync(() => releaseContent());
     const id = realId.current;
-    const sheet = document.querySelector<HTMLElement>(".editor");
-    const card = id ? document.querySelector<HTMLElement>(`.content [data-note-id="${CSS.escape(id)}"]`) : null;
-    const r = card?.getBoundingClientRect();
-    const onScreen = r && r.bottom > 0 && r.top < innerHeight && r.height > 0;
-    // Phones open with a plain cover (the morph snapshots a half-laid-out sheet).
-    // Closing still morphs back to the card — that was the back transition.
-    if (canVT() && sheet && card && onScreen) {
-      sheet.style.viewTransitionName = "note-sheet";
-      document.documentElement.classList.add("note-vt");
-      const t = quiet(document.startViewTransition(async () => {
-        sheet.style.viewTransitionName = "";
-        await back({ note: null });
-        flushSync(() => setMorph(false));
-        document.querySelector<HTMLElement>(`.content [data-note-id="${CSS.escape(id!)}"]`)?.style.setProperty("view-transition-name", "note-sheet");
-      }));
-      t.finished.finally(() => {
-        document.documentElement.classList.remove("note-vt");
-        card.style.removeProperty("view-transition-name");
-      });
-      return;
-    }
-    setClosing(true);
-    setTimeout(() => back({ note: null }), 250);
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    // The grid repaints the released note after this handler. Read the card
+    // on the following frame so the sheet travels to the card's real rect,
+    // not the held-content one.
+    requestAnimationFrame(() => {
+      const sheet = document.querySelector<HTMLElement>(".editor");
+      const backdrop = document.querySelector<HTMLElement>(".editor-backdrop");
+      const card = id ? document.querySelector<HTMLElement>(`.content [data-note-id="${CSS.escape(id)}"]`) : null;
+      const rectNow = card?.getBoundingClientRect();
+      const onScreen =
+        !!rectNow && rectNow.height > 0 && rectNow.width > 0 && rectNow.bottom > 8 && rectNow.top < innerHeight - 8;
+      // Off-screen cards and reduced motion fade in place. A full-screen
+      // slide reads as a snap, not a return to the card.
+      if (!sheet || !card || !onScreen || reduce) {
+        setClosing(true);
+        window.setTimeout(() => back({ note: null }), reduce ? 0 : 240);
+        return;
+      }
+      // Freeze the locked body height, then drop the note-colored page
+      // background, so the list shows through in its own color while the
+      // sheet scales onto the card. The lock itself stays until unmount.
+      document.body.style.height = `${document.body.getBoundingClientRect().height}px`;
+      document.documentElement.classList.remove("note-open");
+      // The grid's column count is measured from the list width. Dropping the
+      // open-note lock changes that width, and the card then moves. Wait until
+      // its rect stops changing, or the sheet flies to where the card was.
+      let last = card.getBoundingClientRect();
+      let stable = 0;
+      let frames = 0;
+      const tick = () => {
+        const rect = card.getBoundingClientRect();
+        const same =
+          Math.abs(rect.left - last.left) < 0.5 &&
+          Math.abs(rect.top - last.top) < 0.5 &&
+          Math.abs(rect.width - last.width) < 0.5 &&
+          Math.abs(rect.height - last.height) < 0.5;
+        stable = same ? stable + 1 : 0;
+        last = rect;
+        frames += 1;
+        if (stable < 1 && frames < 8) {
+          requestAnimationFrame(tick);
+          return;
+        }
+        const anim = morphSheetToCard(sheet, rect, backdrop);
+        let finished = false;
+        const finish = () => {
+          if (finished) return;
+          finished = true;
+          back({ note: null });
+        };
+        anim.finished.then(finish, finish);
+      };
+      requestAnimationFrame(tick);
+    });
   }, []);
 
   // One editor instance per open: a draft turning into a real note ("new" → id) must not remount it.
@@ -194,22 +226,20 @@ export function Shell({ user, onSignOut }: Props) {
   const folderHits = useMemo(() => (q.trim() ? searchFolders(tree, q) : []), [tree, q]);
   const terms = useMemo(() => searchTerms(q), [q]);
   const searchInput = useRef<HTMLInputElement>(null);
-  // A live search <input> is a form field. On a phone, iOS then draws the
-  // prev/next/checkmark bar over whatever you're typing, including the note.
-  useEffect(() => {
-    const input = searchInput.current;
-    if (!input) return;
-    const mq = window.matchMedia("(max-width: 699px)");
-    const apply = () => {
-      input.disabled = !!openId && mq.matches;
-    };
+  // An <input type="search"> is InputType::Search. Disabling it leaves the
+  // element in the document, and iOS still offers it to the accessory.
+  // On a phone with a note open, don't render it at all.
+  const [compact, setCompact] = useState(false);
+  useLayoutEffect(() => {
+    // Phones in landscape can be wider than the 699px layout, and the search
+    // box is still InputType::Search there. Any coarse pointer is a touch device.
+    const mq = window.matchMedia("(max-width: 699px), (pointer: coarse)");
+    const apply = () => setCompact(mq.matches);
     apply();
     mq.addEventListener("change", apply);
-    return () => {
-      mq.removeEventListener("change", apply);
-      input.disabled = false;
-    };
-  }, [openId]);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
+  const hideSearch = !!openId && compact;
 
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -508,26 +538,28 @@ export function Shell({ user, onSignOut }: Props) {
                 </span>
               </>
             )}
-            <input
-              ref={searchInput}
-              type="search"
-              dir="auto"
-              placeholder="Search your notes"
-              value={route.q ?? ""}
-              onFocus={() => route.q === null && navigate({ q: "" })}
-              onChange={(e) => navigate({ q: e.target.value }, { replace: true })}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  e.currentTarget.blur();
-                  back({ q: null });
-                }
-                if (e.key === "Enter") e.currentTarget.blur();
-              }}
-              enterKeyHint="search"
-              autoComplete="off"
-              autoCorrect="off"
-              spellCheck={false}
-            />
+            {!hideSearch && (
+              <input
+                ref={searchInput}
+                type="search"
+                dir="auto"
+                placeholder="Search your notes"
+                value={route.q ?? ""}
+                onFocus={() => route.q === null && navigate({ q: "" })}
+                onChange={(e) => navigate({ q: e.target.value }, { replace: true })}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.currentTarget.blur();
+                    back({ q: null });
+                  }
+                  if (e.key === "Enter") e.currentTarget.blur();
+                }}
+                enterKeyHint="search"
+                autoComplete="off"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+            )}
             {route.q ? (
               <button className="icon-btn" aria-label="Clear search" onClick={() => navigate({ q: "" }, { replace: true })}>
                 <CloseIcon size={20} />

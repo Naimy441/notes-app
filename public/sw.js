@@ -1,7 +1,8 @@
-// Offline-first shell for the home-screen app. Notes themselves live in
-// Firestore's IndexedDB cache; this only makes the app code load without network.
-const SHELL = "shell-v1";
-const STATIC = "static-v1";
+// The home-screen app. Notes live in Firestore's IndexedDB cache.
+// Navigations are network-first: a cache-first shell kept serving the
+// pre-deploy HTML (and its old hashed bundles) after the app had moved on.
+const SHELL = "shell-v2";
+const STATIC = "static-v2";
 
 self.addEventListener("install", (e) => {
   self.skipWaiting();
@@ -38,22 +39,33 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  // The app is a single page: serve the cached shell instantly, refresh it in the background.
-  const key = req.mode === "navigate" ? "/" : req;
-  e.respondWith(
-    caches.open(SHELL).then(async (c) => {
-      const hit = await c.match(key);
-      const network = fetch(req)
-        .then((res) => {
-          if (res.ok && res.type === "basic") c.put(key, res.clone());
+  // Documents: network first, fall back to the last good shell when offline.
+  if (req.mode === "navigate") {
+    e.respondWith(
+      (async () => {
+        const cache = await caches.open(SHELL);
+        try {
+          const res = await fetch(req);
+          if (res.ok && res.type === "basic") cache.put("/", res.clone());
           return res;
-        })
-        .catch(() => hit || Response.error());
-      if (hit) {
-        e.waitUntil(network);
-        return hit;
+        } catch {
+          return (await cache.match("/")) || Response.error();
+        }
+      })(),
+    );
+    return;
+  }
+
+  e.respondWith(
+    (async () => {
+      const cache = await caches.open(SHELL);
+      try {
+        const res = await fetch(req);
+        if (res.ok && res.type === "basic") cache.put(req, res.clone());
+        return res;
+      } catch {
+        return (await cache.match(req)) || Response.error();
       }
-      return network;
-    }),
+    })(),
   );
 });

@@ -3,11 +3,51 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxHighlighting } from "@codemirror/language";
-import { EditorState, Transaction } from "@codemirror/state";
+import { Compartment, EditorState, Transaction } from "@codemirror/state";
 import { EditorView, keymap, placeholder } from "@codemirror/view";
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { bidiHitTest, bidiKeys, bidiLayout, readingRoom, scrollCaretIntoView } from "@/lib/editorKit";
 import { livePreview, markdownHighlight } from "@/lib/livePreview";
+
+let applyBodyEditable: (on: boolean) => void = () => {};
+
+/**
+ * Turn the note body into a form control, or take it back out.
+ * CodeMirror rewrites `contenteditable` on every update, so setting the
+ * attribute from outside does not stick. Reconfiguring the editable facet
+ * makes CodeMirror itself write the value it will keep.
+ */
+export function setBodyEditable(on: boolean) {
+  applyBodyEditable(on);
+}
+
+export type EditSurface = "title" | "body" | "none";
+
+/**
+ * Which note surface currently has an editable style.
+ * WebKit's inputTypeForElement promotes every element with hasEditableStyle()
+ * to InputType::ContentEditable, and isAssistableElement walks those for the
+ * accessory arrows. The title and the body must not both be editable.
+ */
+let surface: EditSurface = "none";
+const surfaceListeners = new Set<() => void>();
+
+export function setEditSurface(next: EditSurface) {
+  surface = next;
+  setBodyEditable(next === "body");
+  surfaceListeners.forEach((fn) => fn());
+}
+
+export function useEditSurface(): EditSurface {
+  return useSyncExternalStore(
+    (cb) => {
+      surfaceListeners.add(cb);
+      return () => surfaceListeners.delete(cb);
+    },
+    () => surface,
+    () => "none",
+  );
+}
 
 interface Props {
   initial: string;
@@ -30,11 +70,13 @@ export function NoteBody({ initial, onChange, onWikilink, onModEnter, onReady }:
   });
 
   useLayoutEffect(() => {
+    const editable = new Compartment();
     const view = new EditorView({
       parent: host.current!,
       state: EditorState.create({
         doc: initial,
         extensions: [
+          editable.of(EditorView.editable.of(false)),
           history(),
           bidiKeys(),
           keymap.of([
@@ -67,9 +109,6 @@ export function NoteBody({ initial, onChange, onWikilink, onModEnter, onReady }:
           }),
           placeholder("Note"),
           EditorView.updateListener.of((u) => {
-            // role=textbox and inputmode make iOS treat this as a form field and
-            // draw the prev/next/done bar. Strip them after each update.
-            stripFormFieldHints(u.view.contentDOM);
             const remote = u.transactions.every((tr) => tr.annotation(Transaction.remote));
             if ((u.docChanged || u.selectionSet) && !remote) {
               // CodeMirror scrolls its own scroller, which is not the sheet.
@@ -84,9 +123,12 @@ export function NoteBody({ initial, onChange, onWikilink, onModEnter, onReady }:
         ],
       }),
     });
-    stripFormFieldHints(view.contentDOM);
+    applyBodyEditable = (on) => {
+      view.dispatch({ effects: editable.reconfigure(EditorView.editable.of(on)) });
+    };
     onReady(view);
     return () => {
+      applyBodyEditable = () => {};
       onReady(null);
       view.destroy();
     };
@@ -95,19 +137,6 @@ export function NoteBody({ initial, onChange, onWikilink, onModEnter, onReady }:
   }, []);
 
   return <div ref={host} className="note-body" dir="ltr" />;
-}
-
-/**
- * iOS draws the form accessory (up/down arrows and a checkmark) for text
- * fields: input, textarea, and contenteditable elements it classifies as one
- * via role=textbox or inputmode. The note body is a contenteditable surface,
- * so those hints have to stay off or the bar comes back.
- */
-function stripFormFieldHints(el: HTMLElement) {
-  el.removeAttribute("role");
-  el.removeAttribute("aria-multiline");
-  el.removeAttribute("inputmode");
-  el.removeAttribute("enterkeyhint");
 }
 
 /** Replace the whole document with text from elsewhere (another device), keeping the cursor if possible. */

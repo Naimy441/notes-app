@@ -34,9 +34,18 @@ export default function App() {
   }, [prefs.theme]);
 
   useEffect(() => {
-    if (process.env.NODE_ENV === "production" && "serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js", { scope: "/", updateViaCache: "none" }).catch(() => {});
+    if (process.env.NODE_ENV !== "production" || !("serviceWorker" in navigator)) return;
+    // A cache-first worker was still drawing the previous bundle. When a new
+    // worker takes over a page that already had one, reload once so the phone
+    // actually runs the new HTML instead of the cached shell.
+    if (sessionStorage.getItem("sw-refreshed") === "1") sessionStorage.removeItem("sw-refreshed");
+    else if (navigator.serviceWorker.controller) {
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        sessionStorage.setItem("sw-refreshed", "1");
+        location.reload();
+      });
     }
+    navigator.serviceWorker.register("/sw.js", { scope: "/", updateViaCache: "none" }).catch(() => {});
   }, []);
 
   const handleSignOut = async () => {

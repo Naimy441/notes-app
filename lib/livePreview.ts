@@ -20,10 +20,13 @@ class CheckboxWidget extends WidgetType {
     return other.checked === this.checked;
   }
   toDOM(view: EditorView) {
-    const box = document.createElement("input");
-    box.type = "checkbox";
-    box.className = "cm-task-box";
-    box.checked = this.checked;
+    // A real <input type="checkbox"> is a form control. iOS then offers it to
+    // the keyboard's prev/next accessory while the note is focused. A span is
+    // not an input, so it is not promoted.
+    const box = document.createElement("span");
+    box.className = this.checked ? "cm-task-box on" : "cm-task-box";
+    box.setAttribute("role", "checkbox");
+    box.setAttribute("aria-checked", this.checked ? "true" : "false");
     box.setAttribute("aria-label", this.checked ? "Mark not done" : "Mark done");
     // Don't move the cursor or raise the keyboard; just toggle.
     box.addEventListener("mousedown", (e) => e.preventDefault());
@@ -290,8 +293,8 @@ const theme = EditorView.theme({
     placeItems: "center",
     transition: "background .15s, border-color .15s",
   },
-  ".cm-task-box:checked": { backgroundColor: "var(--accent)", borderColor: "var(--accent)" },
-  ".cm-task-box:checked::after": {
+  ".cm-task-box.on": { backgroundColor: "var(--accent)", borderColor: "var(--accent)" },
+  ".cm-task-box.on::after": {
     content: '""',
     width: "0.3em",
     height: "0.55em",

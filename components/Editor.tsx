@@ -2,13 +2,14 @@
 
 import type { EditorView } from "@codemirror/view";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { baseName, longDate } from "@/lib/derive";
 import { scrollCaretIntoView } from "@/lib/editorKit";
 import { getAuthInstance } from "@/lib/firebase";
 import { createNote, discardNote, flushPending, newNoteId, purgeNotes, updateNote, useStore } from "@/lib/store";
 import type { Note } from "@/lib/types";
 import { FolderPicker } from "./FolderPicker";
-import { NoteBody, setRemoteText } from "./NoteBody";
+import { NoteBody, setEditSurface, setRemoteText, useEditSurface } from "./NoteBody";
 import {
   ArchiveIcon,
   BackIcon,
@@ -148,11 +149,39 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
     if (!el || document.activeElement === el) return;
     if ((el.textContent ?? "") !== title) el.textContent = title;
   }, [title]);
+  const surface = useEditSurface();
+  const seeded = useRef(false);
+  useLayoutEffect(() => {
+    if (seeded.current) return;
+    seeded.current = true;
+    // Start with no editable style. A tap arms exactly one surface before focus,
+    // so iOS never sees the title and the body as two assistable fields.
+    setEditSurface(isNew ? "title" : "none");
+  }, [isNew]);
+  useEffect(() => () => setEditSurface("none"), []);
   useEffect(() => {
-    if (!isNew) return;
+    if (!isNew || surface !== "title") return;
     // Focus after the open animation so iOS raises the keyboard reliably.
     titleRef.current?.focus({ preventScroll: true });
-  }, [isNew]);
+  }, [isNew, surface]);
+  // iOS builds the prev/next/done bar from every element with an editable
+  // style, not from ARIA role. Arm the surface under the finger before focus.
+  useEffect(() => {
+    const root = sheet.current;
+    if (!root) return;
+    const arm = (e: Event) => {
+      const t = e.target;
+      if (!(t instanceof Element)) return;
+      if (t.closest(".editor-title")) flushSync(() => setEditSurface("title"));
+      else if (t.closest(".note-body")) flushSync(() => setEditSurface("body"));
+    };
+    root.addEventListener("pointerdown", arm, true);
+    root.addEventListener("touchstart", arm, true);
+    return () => {
+      root.removeEventListener("pointerdown", arm, true);
+      root.removeEventListener("touchstart", arm, true);
+    };
+  }, []);
 
   const save = useCallback(
     (patch: { title?: string; body?: string }) => {
@@ -194,6 +223,7 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
   const focusBody = (pos?: number) => {
     const v = view.current;
     if (!v) return;
+    flushSync(() => setEditSurface("body"));
     v.focus();
     const at = Math.min(pos ?? v.state.doc.length, v.state.doc.length);
     v.dispatch({ selection: { anchor: at }, scrollIntoView: true });
@@ -208,13 +238,17 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
     const selIsUrl = /^\s*(https?:\/\/|www\.)\S+\s*$/i.test(selected);
     const res = await linkPrompt({ text: selIsUrl ? "" : selected.trim(), url: selIsUrl ? selected.trim() : "" });
     if (!res) {
-      if (focused) v.focus();
+      if (focused) {
+        flushSync(() => setEditSurface("body"));
+        v.focus();
+      }
       return;
     }
     let md = markdownLink(res.text, res.url);
     // Appending to a note that wasn't being edited: start the link on its own line.
     if (!focused && v.state.doc.length && !v.state.doc.toString().endsWith("\n")) md = "\n" + md;
     v.dispatch({ changes: { from, to, insert: md }, selection: { anchor: from + md.length }, scrollIntoView: true });
+    flushSync(() => setEditSurface("body"));
     v.focus();
   };
   const addLinkRef = useRef(addLink);
@@ -446,7 +480,7 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
           <div
             ref={titleRef}
             className="editor-title"
-            contentEditable
+            contentEditable={surface === "title"}
             aria-label="Title"
             data-placeholder="Title"
             dir="auto"
