@@ -6,7 +6,8 @@ import { freeze } from "@/lib/freeze";
 import { previewSource, renderMarkdown, toggleTaskLine } from "@/lib/markdown";
 import { updateNote } from "@/lib/store";
 import type { Note, SortKey } from "@/lib/types";
-import { FolderIcon, PinFilledIcon, PinIcon } from "./icons";
+import { CheckIcon, FolderIcon, PinFilledIcon, PinIcon } from "./icons";
+import { useSelect } from "./select";
 
 export const PREVIEW_CHARS = 1200;
 
@@ -24,6 +25,9 @@ interface Props {
 export const NoteCard = memo(function NoteCard({ note, index, animate, showFolder, dateKey, terms, onOpen, onWikilink }: Props) {
   const ref = useRef<HTMLElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const select = useSelect();
+  const press = useRef<{ timer: number; x: number; y: number } | null>(null);
+  const suppressClick = useRef(false);
   const src = useMemo(() => previewSource(note.body, PREVIEW_CHARS), [note.body]);
   const html = useMemo(() => renderMarkdown(src, `${note.id}:${note.updatedAt}`), [src, note.id, note.updatedAt]);
   const clipped = note.body.length > 520 || note.body.split("\n", 16).length > 14;
@@ -36,7 +40,43 @@ export const NoteCard = memo(function NoteCard({ note, index, animate, showFolde
     if (termKey) highlight(el, termKey.split("\u0000"));
   }, [html, termKey]);
 
+  const clearPress = () => {
+    if (!press.current) return;
+    window.clearTimeout(press.current.timer);
+    press.current = null;
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0 || select?.on) return;
+    const t = e.target as HTMLElement;
+    if (t.closest("button, a, input")) return;
+    press.current = {
+      x: e.clientX,
+      y: e.clientY,
+      timer: window.setTimeout(() => {
+        suppressClick.current = true;
+        press.current = null;
+        select?.arm(note.id);
+      }, 420),
+    };
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    const p = press.current;
+    if (!p) return;
+    if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > 8) clearPress();
+  };
+
   const onClick = (e: React.MouseEvent) => {
+    if (suppressClick.current) {
+      suppressClick.current = false;
+      return;
+    }
+    if (select?.on) {
+      e.preventDefault();
+      select.toggle(note.id);
+      return;
+    }
     const t = e.target as HTMLElement;
     if (t instanceof HTMLInputElement && t.dataset.taskLine) {
       e.stopPropagation();
@@ -62,12 +102,25 @@ export const NoteCard = memo(function NoteCard({ note, index, animate, showFolde
     <article
       ref={ref}
       data-note-id={note.id}
-      className={`card${animate ? " enter" : ""}`}
+      className={`card${animate ? " enter" : ""}${select?.on ? " selecting" : ""}${select?.ids.has(note.id) ? " selected" : ""}`}
       style={animate ? ({ "--i": index } as React.CSSProperties) : undefined}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={clearPress}
+      onPointerCancel={clearPress}
       onClick={onClick}
       tabIndex={0}
-      onKeyDown={(e) => e.key === "Enter" && e.target === ref.current && onOpen(note.id, ref.current!)}
+      onKeyDown={(e) => {
+        if (e.key !== "Enter" || e.target !== ref.current) return;
+        if (select?.on) select.toggle(note.id);
+        else onOpen(note.id, ref.current!);
+      }}
     >
+      {select?.on && (
+        <span className="card-check" aria-hidden="true">
+          {select.ids.has(note.id) && <CheckIcon size={14} />}
+        </span>
+      )}
       <button
         className={`icon-btn sm card-pin${note.pinned ? " on" : ""}`}
         aria-label={note.pinned ? "Unpin" : "Pin"}

@@ -18,6 +18,9 @@ import {
 
 export const OWNER_EMAIL = "abdullah.naim.441@gmail.com";
 
+/** Public Firebase web key (already shipped in the client). Not an OpenAI secret. */
+export const WEB_API_KEY = "AIzaSyAQmcPniVOBtXDi00Q78xmV4t4q6YV2QiE";
+
 const useEmulators = process.env.NEXT_PUBLIC_USE_EMULATORS === "1";
 
 function authDomain() {
@@ -40,7 +43,7 @@ function getApp() {
     app =
       getApps()[0] ??
       initializeApp({
-        apiKey: "AIzaSyAQmcPniVOBtXDi00Q78xmV4t4q6YV2QiE",
+        apiKey: WEB_API_KEY,
         authDomain: authDomain(),
         projectId: "note-d7ce7",
         storageBucket: "note-d7ce7.firebasestorage.app",

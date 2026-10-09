@@ -1,17 +1,18 @@
 "use client";
 
 import type { User } from "firebase/auth";
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { baseName, buildFolderTree, byDate, countSubfolders, makeHue, parentOf, recentInFolder, searchFolders, searchNotes, searchTerms } from "@/lib/derive";
-import { clearFrozen, freeze, useFrozen } from "@/lib/freeze";
+import { clearFrozen, freeze, holdContent, presentNote, releaseContent, useFrozen, useHeld } from "@/lib/freeze";
 import { setPref, usePrefs } from "@/lib/prefs";
 import { back, navigate, useRoute, type Route } from "@/lib/router";
 import { createFolder, deleteFolder, getState, purgeNotes, renameFolder, updateNote, useStore, type StoreState } from "@/lib/store";
 import type { FolderNode, Note } from "@/lib/types";
-import { canVT, quiet } from "@/lib/vt";
+import { canMorphNote, quiet } from "@/lib/vt";
 import { Editor } from "./Editor";
 import { FolderCard } from "./FolderCard";
+import { FolderPicker } from "./FolderPicker";
 import {
   ArchiveIcon,
   BackIcon,
@@ -33,6 +34,7 @@ import {
 } from "./icons";
 import { GridSkeleton, NoteGrid } from "./NoteGrid";
 import { OverlayHost, confirm, menu, prompt, toast } from "./overlays";
+import { SelectProvider, type SelectApi } from "./select";
 import { Sidebar } from "./Sidebar";
 
 interface Props {
@@ -46,12 +48,16 @@ export function Shell({ user, onSignOut }: Props) {
   const prefs = usePrefs();
   const sort = prefs.sort;
   const frozen = useFrozen();
+  const held = useHeld();
 
   // Leaving a view re-sorts everything normally (edited notes move to their real place).
   const viewKey = `${route.view}|${route.folder}|${route.q !== null}`;
   useEffect(() => clearFrozen(), [viewKey]);
 
-  const allNotes = useMemo(() => [...store.notes.values()], [store]);
+  const allNotes = useMemo(
+    () => [...store.notes.values()].map((n) => presentNote(n, held)),
+    [store, held],
+  );
   const tree = useMemo(() => buildFolderTree(allNotes, store.folders.values(), sort, frozen), [allNotes, store.folders, sort, frozen]);
   const hue = useMemo(() => makeHue(tree), [tree]);
   const folderPaths = useMemo(() => [...tree.keys()].filter(Boolean), [tree]);
@@ -74,17 +80,31 @@ export function Shell({ user, onSignOut }: Props) {
     if (openId && !openId.startsWith("new")) realId.current = openId;
   }, [openId]);
 
-  useEffect(() => {
-    document.body.classList.toggle("locked", !!openId);
+  useLayoutEffect(() => {
+    if (!openId) {
+      releaseContent();
+      return;
+    }
+    const y = window.scrollY;
+    document.body.classList.add("locked");
+    document.body.style.top = `-${y}px`;
+    return () => {
+      document.body.classList.remove("locked");
+      document.body.style.top = "";
+      window.scrollTo(0, y);
+    };
   }, [openId]);
 
   const openNote = useCallback((id: string, el?: HTMLElement) => {
-    freeze(getState().notes.get(id));
-    if (!el || !canVT()) {
+    const note = getState().notes.get(id);
+    freeze(note);
+    holdContent(note);
+    if (!el || !canMorphNote()) {
       navigate({ note: id });
       return;
     }
     el.style.viewTransitionName = "note-sheet";
+    document.documentElement.classList.add("note-vt");
     const t = quiet(document.startViewTransition(() => {
       el.style.viewTransitionName = "";
       flushSync(() => {
@@ -93,24 +113,32 @@ export function Shell({ user, onSignOut }: Props) {
       });
       document.querySelector<HTMLElement>(".editor")?.style.setProperty("view-transition-name", "note-sheet");
     }));
-    t.finished.finally(() => document.querySelector<HTMLElement>(".editor")?.style.removeProperty("view-transition-name"));
+    t.finished.finally(() => {
+      document.documentElement.classList.remove("note-vt");
+      document.querySelector<HTMLElement>(".editor")?.style.removeProperty("view-transition-name");
+    });
   }, []);
 
   const closeEditor = useCallback(() => {
+    flushSync(() => releaseContent());
     const id = realId.current;
     const sheet = document.querySelector<HTMLElement>(".editor");
     const card = id ? document.querySelector<HTMLElement>(`.content [data-note-id="${CSS.escape(id)}"]`) : null;
     const r = card?.getBoundingClientRect();
     const onScreen = r && r.bottom > 0 && r.top < innerHeight && r.height > 0;
-    if (canVT() && sheet && card && onScreen) {
+    if (canMorphNote() && sheet && card && onScreen) {
       sheet.style.viewTransitionName = "note-sheet";
+      document.documentElement.classList.add("note-vt");
       const t = quiet(document.startViewTransition(async () => {
         sheet.style.viewTransitionName = "";
         await back({ note: null });
         flushSync(() => setMorph(false));
         document.querySelector<HTMLElement>(`.content [data-note-id="${CSS.escape(id!)}"]`)?.style.setProperty("view-transition-name", "note-sheet");
       }));
-      t.finished.finally(() => card.style.removeProperty("view-transition-name"));
+      t.finished.finally(() => {
+        document.documentElement.classList.remove("note-vt");
+        card.style.removeProperty("view-transition-name");
+      });
       return;
     }
     setClosing(true);
@@ -131,6 +159,7 @@ export function Shell({ user, onSignOut }: Props) {
   }
 
   const onCreated = useCallback((id: string) => {
+    holdContent(getState().notes.get(id));
     realId.current = id;
     setCreatedId(id);
     navigate({ note: id }, { replace: true });
@@ -152,10 +181,63 @@ export function Shell({ user, onSignOut }: Props) {
   // ── search ────────────────────────────────────────────────────────────────
   const searching = route.q !== null;
   const q = useDeferredValue(route.q ?? "");
-  const results = useMemo(() => (q.trim() ? searchNotes(allNotes, q, sort, frozen) : []), [allNotes, q, sort, frozen]);
+  const queryActive = q.trim().length > 0;
+  const results = useMemo(() => (queryActive ? searchNotes(allNotes, q, sort, frozen) : []), [allNotes, q, queryActive, sort, frozen]);
   const folderHits = useMemo(() => (q.trim() ? searchFolders(tree, q) : []), [tree, q]);
   const terms = useMemo(() => searchTerms(q), [q]);
   const searchInput = useRef<HTMLInputElement>(null);
+
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [moving, setMoving] = useState(false);
+  useEffect(() => {
+    setSelecting(false);
+    setSelected(new Set());
+    setMoving(false);
+  }, [route.view, route.folder, searching]);
+  const selectApi = useMemo<SelectApi>(
+    () => ({
+      on: selecting,
+      ids: selected,
+      toggle: (id: string) =>
+        setSelected((cur) => {
+          const next = new Set(cur);
+          if (next.has(id)) next.delete(id);
+          else next.add(id);
+          return next;
+        }),
+      arm: (id: string) => {
+        setSelecting(true);
+        setSelected((cur) => new Set(cur).add(id));
+      },
+    }),
+    [selecting, selected],
+  );
+  const exitSelect = () => {
+    setSelecting(false);
+    setSelected(new Set());
+    setMoving(false);
+  };
+  const deleteSelected = () => {
+    const ids = [...selected];
+    if (!ids.length) return;
+    const chosen = ids.map((id) => getState().notes.get(id)).filter((n): n is Note => !!n);
+    if (chosen.length && chosen.every((n) => n.deleted)) {
+      purgeNotes(ids);
+      toast(`Deleted ${ids.length} ${ids.length === 1 ? "note" : "notes"}`);
+    } else {
+      ids.forEach((id) => updateNote(id, { deleted: true }));
+      toast(`Moved ${ids.length} ${ids.length === 1 ? "note" : "notes"} to trash`, {
+        label: "Undo",
+        run: () => ids.forEach((id) => updateNote(id, { deleted: false }, { touch: false })),
+      });
+    }
+    exitSelect();
+  };
+
+  useEffect(() => {
+    if (openId && !openId.startsWith("new")) holdContent(getState().notes.get(openId));
+  }, [openId]);
 
   // ── chrome ────────────────────────────────────────────────────────────────
   const [drawer, setDrawer] = useState<"open" | "closing" | null>(null);
@@ -270,7 +352,7 @@ export function Shell({ user, onSignOut }: Props) {
   let content: React.ReactNode;
   if (loading) {
     content = <GridSkeleton />;
-  } else if (searching) {
+  } else if (searching && queryActive) {
     content = (
       <SearchResults
         q={q}
@@ -285,6 +367,13 @@ export function Shell({ user, onSignOut }: Props) {
   } else if (route.view === "notes") {
     content = (
       <>
+        {live.length > 0 && !selecting && (
+          <div className="home-select-row">
+            <button className="text-btn" onClick={() => setSelecting(true)}>
+              Select
+            </button>
+          </div>
+        )}
         <PinnedAndOthers notes={live} resetKey="notes" showFolder gridProps={gridProps} empty="Notes you add appear here" />
       </>
     );
@@ -341,8 +430,9 @@ export function Shell({ user, onSignOut }: Props) {
   const sidebarProps = { route, tree, hue, counts, user, onSignOut };
 
   return (
+    <SelectProvider value={selectApi}>
     <div className="shell">
-      <header className={`topbar${scrolled ? " scrolled" : ""}`}>
+      <header className={`topbar${scrolled ? " scrolled" : ""}`} inert={openId ? true : undefined}>
         <div className="topbar-row">
           <div className="brand desk-only topbar-brand">
             <div className="brand-mark">
@@ -400,7 +490,7 @@ export function Shell({ user, onSignOut }: Props) {
         <aside className="sidebar-desktop">
           <Sidebar {...sidebarProps} />
         </aside>
-        <main className="content">
+        <main className="content" inert={openId ? true : undefined}>
           {store.error && !store.serverSynced && (
             <div className="chip" style={{ margin: "8px 0", whiteSpace: "normal", color: "var(--danger)" }}>
               Sync error: {store.error}
@@ -410,10 +500,27 @@ export function Shell({ user, onSignOut }: Props) {
         </main>
       </div>
 
-      {!openId && (
+      {!openId && !selecting && (
         <button className="fab" aria-label="New note" onClick={newNote}>
           <PlusIcon size={28} strokeWidth={2.2} />
         </button>
+      )}
+
+      {selecting && !openId && (
+        <div className="select-bar" role="toolbar" aria-label="Selected notes">
+          <button className="text-btn" onClick={exitSelect}>
+            Cancel
+          </button>
+          <span>
+            {selected.size} selected
+          </span>
+          <button className="btn ghost" disabled={selected.size === 0} onClick={() => setMoving(true)}>
+            Move
+          </button>
+          <button className="btn danger" disabled={selected.size === 0} onClick={deleteSelected}>
+            Delete
+          </button>
+        </div>
       )}
 
       {drawer && (
@@ -445,8 +552,29 @@ export function Shell({ user, onSignOut }: Props) {
         />
       )}
 
+      {moving && (
+        <FolderPicker
+          folders={folderPaths}
+          current=""
+          onClose={() => setMoving(false)}
+          onPick={(p) => {
+            const ids = [...selected];
+            ids.forEach((id) => updateNote(id, { folder: p }, { touch: false }));
+            toast(
+              ids.length
+                ? p
+                  ? `Moved ${ids.length} ${ids.length === 1 ? "note" : "notes"} to ${baseName(p)}`
+                  : `Moved ${ids.length} ${ids.length === 1 ? "note" : "notes"} out of folders`
+                : "Nothing selected",
+            );
+            exitSelect();
+          }}
+        />
+      )}
+
       <OverlayHost />
     </div>
+    </SelectProvider>
   );
 }
 

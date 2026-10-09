@@ -10,6 +10,13 @@ export const canVT = () =>
   document.visibilityState === "visible" &&
   !reduced();
 
+/**
+ * Card-to-sheet morphs. On a phone the first transition snapshots a half-laid-out
+ * fixed sheet and flashes the list behind it, so mobile opens with a plain cover.
+ */
+export const canMorphNote = () =>
+  canVT() && window.matchMedia("(min-width: 700px) and (pointer: fine)").matches;
+
 /** Aborted transitions (e.g. tab hidden mid-flight) still apply the update; don't surface them as errors. */
 export function quiet(t: ViewTransition) {
   t.ready.catch(() => {});

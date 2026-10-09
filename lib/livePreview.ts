@@ -261,10 +261,12 @@ export const markdownHighlight = HighlightStyle.define([
 const theme = EditorView.theme({
   "&": { color: "var(--text)", backgroundColor: "transparent", fontSize: "16px" },
   "&.cm-focused": { outline: "none" },
-  ".cm-scroller": { fontFamily: "var(--font)", lineHeight: "1.6", overflow: "visible" },
-  ".cm-content": { padding: "4px 0 40vh", caretColor: "var(--text)", minHeight: "40vh" },
-  // Each line aligns by its own direction (Arabic lines sit on the right).
-  ".cm-line": { padding: "0", unicodeBidi: "plaintext", textAlign: "start" },
+  ".cm-scroller": { fontFamily: "var(--font)", lineHeight: "1.65", overflow: "visible" },
+  ".cm-content": { padding: "4px 0 12px", caretColor: "var(--text)", minHeight: "30vh", overflowAnchor: "none" },
+  // `dir` is set per line (see lib/editorKit.ts). Isolate so that attribute wins
+  // over a document that also contains Arabic.
+  ".cm-line": { padding: "0", unicodeBidi: "isolate", textAlign: "start" },
+  ".cm-ar": { fontSize: "1.22em" },
   ".cm-placeholder": { color: "var(--muted)" },
   ".cm-h": { fontWeight: "700", letterSpacing: "-0.01em" },
   ".cm-h1": { fontSize: "1.45em", lineHeight: "1.35" },
