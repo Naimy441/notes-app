@@ -84,6 +84,18 @@ async function isOwner(req: Request): Promise<boolean> {
   const header = req.headers.get("authorization") ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
   if (!token) return false;
+  if (await googleOwner(token)) return true;
+  // The Auth emulator's ID tokens are not accepted by Google's lookup API.
+  // Trust the owner claim only for a local dev server.
+  return process.env.NODE_ENV !== "production" && isLocalHost(req) && localOwner(token);
+}
+
+function isLocalHost(req: Request) {
+  const host = (req.headers.get("host") ?? "").replace(/:\d+$/, "");
+  return host === "localhost" || host === "127.0.0.1";
+}
+
+async function googleOwner(token: string): Promise<boolean> {
   try {
     const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${WEB_API_KEY}`, {
       method: "POST",
@@ -94,6 +106,21 @@ async function isOwner(req: Request): Promise<boolean> {
     const data = await res.json();
     const user = data.users?.[0] as { email?: string; emailVerified?: boolean } | undefined;
     return user?.email === OWNER_EMAIL && user.emailVerified === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Unsigned local-emulator token. Never used in production. */
+function localOwner(token: string): boolean {
+  const payload = token.split(".")[1];
+  if (!payload) return false;
+  try {
+    const json = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
+      email?: string;
+      email_verified?: boolean;
+    };
+    return json.email === OWNER_EMAIL && json.email_verified === true;
   } catch {
     return false;
   }
