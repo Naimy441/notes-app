@@ -67,6 +67,9 @@ export function NoteBody({ initial, onChange, onWikilink, onModEnter, onReady }:
           }),
           placeholder("Note"),
           EditorView.updateListener.of((u) => {
+            // role=textbox and inputmode make iOS treat this as a form field and
+            // draw the prev/next/done bar. Strip them after each update.
+            stripFormFieldHints(u.view.contentDOM);
             const remote = u.transactions.every((tr) => tr.annotation(Transaction.remote));
             if ((u.docChanged || u.selectionSet) && !remote) {
               // CodeMirror scrolls its own scroller, which is not the sheet.
@@ -81,7 +84,7 @@ export function NoteBody({ initial, onChange, onWikilink, onModEnter, onReady }:
         ],
       }),
     });
-    hideIosAccessory(view.contentDOM);
+    stripFormFieldHints(view.contentDOM);
     onReady(view);
     return () => {
       onReady(null);
@@ -95,19 +98,16 @@ export function NoteBody({ initial, onChange, onWikilink, onModEnter, onReady }:
 }
 
 /**
- * iOS draws a keyboard accessory (checkmark, up/down arrows) for text fields.
- * Swapping inputmode as focus lands is the web workaround that keeps the
- * keyboard and drops that bar.
+ * iOS draws the form accessory (up/down arrows and a checkmark) for text
+ * fields: input, textarea, and contenteditable elements it classifies as one
+ * via role=textbox or inputmode. The note body is a contenteditable surface,
+ * so those hints have to stay off or the bar comes back.
  */
-function hideIosAccessory(el: HTMLElement) {
-  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-  if (!ios) return;
-  el.setAttribute("inputmode", "text");
-  el.setAttribute("enterkeyhint", "enter");
-  el.addEventListener("focus", () => {
-    el.setAttribute("inputmode", "none");
-    window.setTimeout(() => el.setAttribute("inputmode", "text"), 40);
-  });
+function stripFormFieldHints(el: HTMLElement) {
+  el.removeAttribute("role");
+  el.removeAttribute("aria-multiline");
+  el.removeAttribute("inputmode");
+  el.removeAttribute("enterkeyhint");
 }
 
 /** Replace the whole document with text from elsewhere (another device), keeping the cursor if possible. */

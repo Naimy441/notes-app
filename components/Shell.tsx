@@ -9,7 +9,7 @@ import { setPref, usePrefs } from "@/lib/prefs";
 import { back, navigate, useRoute, type Route } from "@/lib/router";
 import { createFolder, deleteFolder, getState, purgeNotes, renameFolder, updateNote, useStore, type StoreState } from "@/lib/store";
 import type { FolderNode, Note } from "@/lib/types";
-import { canMorphNote, quiet } from "@/lib/vt";
+import { canMorphNote, canVT, quiet } from "@/lib/vt";
 import { Editor } from "./Editor";
 import { FolderCard } from "./FolderCard";
 import { FolderPicker } from "./FolderPicker";
@@ -83,14 +83,20 @@ export function Shell({ user, onSignOut }: Props) {
   useLayoutEffect(() => {
     if (!openId) {
       releaseContent();
+      document.documentElement.classList.remove("note-open");
+      document.documentElement.style.removeProperty("--lock-y");
       return;
     }
     const y = window.scrollY;
+    document.documentElement.classList.add("note-open");
+    document.documentElement.style.setProperty("--lock-y", `${y}px`);
     document.body.classList.add("locked");
     document.body.style.top = `-${y}px`;
     return () => {
       document.body.classList.remove("locked");
       document.body.style.top = "";
+      document.documentElement.classList.remove("note-open");
+      document.documentElement.style.removeProperty("--lock-y");
       window.scrollTo(0, y);
     };
   }, [openId]);
@@ -126,7 +132,9 @@ export function Shell({ user, onSignOut }: Props) {
     const card = id ? document.querySelector<HTMLElement>(`.content [data-note-id="${CSS.escape(id)}"]`) : null;
     const r = card?.getBoundingClientRect();
     const onScreen = r && r.bottom > 0 && r.top < innerHeight && r.height > 0;
-    if (canMorphNote() && sheet && card && onScreen) {
+    // Phones open with a plain cover (the morph snapshots a half-laid-out sheet).
+    // Closing still morphs back to the card — that was the back transition.
+    if (canVT() && sheet && card && onScreen) {
       sheet.style.viewTransitionName = "note-sheet";
       document.documentElement.classList.add("note-vt");
       const t = quiet(document.startViewTransition(async () => {
@@ -142,7 +150,7 @@ export function Shell({ user, onSignOut }: Props) {
       return;
     }
     setClosing(true);
-    setTimeout(() => back({ note: null }), 190);
+    setTimeout(() => back({ note: null }), 250);
   }, []);
 
   // One editor instance per open: a draft turning into a real note ("new" → id) must not remount it.
@@ -186,6 +194,22 @@ export function Shell({ user, onSignOut }: Props) {
   const folderHits = useMemo(() => (q.trim() ? searchFolders(tree, q) : []), [tree, q]);
   const terms = useMemo(() => searchTerms(q), [q]);
   const searchInput = useRef<HTMLInputElement>(null);
+  // A live search <input> is a form field. On a phone, iOS then draws the
+  // prev/next/checkmark bar over whatever you're typing, including the note.
+  useEffect(() => {
+    const input = searchInput.current;
+    if (!input) return;
+    const mq = window.matchMedia("(max-width: 699px)");
+    const apply = () => {
+      input.disabled = !!openId && mq.matches;
+    };
+    apply();
+    mq.addEventListener("change", apply);
+    return () => {
+      mq.removeEventListener("change", apply);
+      input.disabled = false;
+    };
+  }, [openId]);
 
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -214,10 +238,39 @@ export function Shell({ user, onSignOut }: Props) {
     [selecting, selected],
   );
   const exitSelect = () => {
+    window.getSelection()?.removeAllRanges();
     setSelecting(false);
     setSelected(new Set());
     setMoving(false);
   };
+  // A long-press both arms selection and starts a native text selection. iOS
+  // then extends that selection onto Cancel as the bar mounts, and the callout
+  // eats the tap. user-select on the bar is not enough once the gesture has
+  // already begun, so keep collapsing it for the whole selection session.
+  useEffect(() => {
+    if (!selecting) return;
+    const editable = "input, textarea, [contenteditable='true'], [contenteditable='plaintext-only']";
+    const wipe = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) return;
+      const node = sel.anchorNode;
+      const el = node instanceof Element ? node : node?.parentElement;
+      if (el?.closest(editable)) return;
+      sel.removeAllRanges();
+    };
+    const stop = (e: Event) => {
+      const t = e.target;
+      if (t instanceof Element && t.closest(editable)) return;
+      e.preventDefault();
+    };
+    document.addEventListener("selectstart", stop, true);
+    document.addEventListener("selectionchange", wipe);
+    wipe();
+    return () => {
+      document.removeEventListener("selectstart", stop, true);
+      document.removeEventListener("selectionchange", wipe);
+    };
+  }, [selecting]);
   const deleteSelected = () => {
     const ids = [...selected];
     if (!ids.length) return;
@@ -508,7 +561,20 @@ export function Shell({ user, onSignOut }: Props) {
 
       {selecting && !openId && (
         <div className="select-bar" role="toolbar" aria-label="Selected notes">
-          <button className="text-btn" onClick={exitSelect}>
+          <button
+            type="button"
+            className="text-btn"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              if (e.pointerType !== "mouse") e.preventDefault();
+            }}
+            onPointerUp={(e) => {
+              if (e.pointerType === "mouse") return;
+              e.preventDefault();
+              exitSelect();
+            }}
+            onClick={exitSelect}
+          >
             Cancel
           </button>
           <span>

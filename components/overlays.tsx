@@ -142,29 +142,121 @@ export function OverlayHost() {
 }
 
 function DialogView({ d, close }: { d: Dialog; close: () => void }) {
+  const multiline = d.kind === "prompt" && !!d.multiline;
   const [value, setValue] = useState(d.kind === "prompt" ? (d.initial ?? "") : d.kind === "link" ? d.url : "");
   const [text, setText] = useState(d.kind === "link" ? d.text : "");
   const input = useRef<HTMLInputElement>(null);
-  const area = useRef<HTMLTextAreaElement>(null);
+  const field = useRef<HTMLDivElement>(null);
+  const backdrop = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (d.kind === "confirm") return;
-    const el = d.kind === "prompt" && d.multiline ? area.current : input.current;
+    if (multiline) {
+      const el = field.current;
+      if (!el) return;
+      el.textContent = d.kind === "prompt" ? (d.initial ?? "") : "";
+      el.focus();
+      return;
+    }
+    const el = input.current;
     el?.focus();
     el?.select();
+  }, [d, multiline]);
+  // Keep a prompt that is open with the keyboard fully inside the visible
+  // viewport, so Cancel / Apply sit above the keyboard rather than under it.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    const el = backdrop.current;
+    if (!vv || !el) return;
+    let timer = 0;
+    const update = () => {
+      const mobile = window.innerWidth < 700;
+      const open = mobile && window.innerHeight - vv.height > 80;
+      el.classList.toggle("above-kb", open);
+      if (open) {
+        el.style.top = `${vv.offsetTop}px`;
+        el.style.height = `${vv.height}px`;
+        el.style.bottom = "auto";
+      } else {
+        el.style.top = "";
+        el.style.height = "";
+        el.style.bottom = "";
+      }
+    };
+    update();
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    const onFocus = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(update, 60);
+    };
+    el.addEventListener("focusin", onFocus);
+    return () => {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+      el.removeEventListener("focusin", onFocus);
+      window.clearTimeout(timer);
+    };
   }, [d]);
   const finish = (ok: boolean) => {
+    const typed = multiline ? (field.current?.textContent ?? "").replace(/\u00a0/g, " ") : value;
     close();
-    if (d.kind === "prompt") d.resolve(ok && value.trim() ? value.trim() : null);
+    if (d.kind === "prompt") d.resolve(ok && typed.trim() ? typed.trim() : null);
     else if (d.kind === "link") d.resolve(ok && value.trim() ? { text: text.trim(), url: value.trim() } : null);
     else d.resolve(ok);
   };
+  useEffect(() => {
+    if (!multiline) return;
+    // One editing surface while the prompt is open. A second text field
+    // (the note title or body) is enough for iOS to bring the accessory back.
+    const nodes = [...document.querySelectorAll<HTMLElement>(".editor-title, .cm-content")];
+    nodes.forEach((n) => n.setAttribute("contenteditable", "false"));
+    return () => nodes.forEach((n) => n.setAttribute("contenteditable", "true"));
+  }, [multiline]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && finish(false);
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
   return createPortal(
-    <div className="sheet-backdrop" style={{ alignItems: "center" }} onClick={() => finish(false)}>
+    <div ref={backdrop} className="sheet-backdrop" style={{ alignItems: "center" }} onClick={() => finish(false)}>
+      {/* A textarea or input inside a form is what makes iOS draw the
+          prev/next/checkmark bar. The multiline prompt is a contenteditable
+          div, and it is not a form. */}
+      {multiline ? (
+        <div className="dialog" role="dialog" aria-label={d.kind === "prompt" ? d.title : "Edit"} onClick={(e) => e.stopPropagation()}>
+          <h3>{d.kind === "prompt" ? d.title : ""}</h3>
+          {d.kind === "prompt" && d.message && <p>{d.message}</p>}
+          <div
+            ref={field}
+            className="dialog-area plain-field"
+            contentEditable
+            aria-label={d.kind === "prompt" ? d.placeholder || d.title : "Prompt"}
+            data-placeholder={d.kind === "prompt" ? d.placeholder : undefined}
+            dir="auto"
+            spellCheck={false}
+            suppressContentEditableWarning
+            onPaste={(e) => {
+              e.preventDefault();
+              const pasted = e.clipboardData.getData("text/plain");
+              if (pasted) document.execCommand("insertText", false, pasted);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                finish(true);
+              }
+            }}
+          />
+          <div className="actions">
+            <button type="button" className="btn ghost" onClick={() => finish(false)}>
+              Cancel
+            </button>
+            <button type="button" className={`btn primary`} onClick={() => finish(true)}>
+              {d.kind === "prompt" ? (d.ok ?? "OK") : "OK"}
+            </button>
+          </div>
+        </div>
+      ) : (
       <form
         className="dialog"
         noValidate
@@ -200,24 +292,7 @@ function DialogView({ d, close }: { d: Dialog; close: () => void }) {
             />
           </>
         )}
-        {d.kind === "prompt" &&
-          (d.multiline ? (
-            <textarea
-              ref={area}
-              className="dialog-area"
-              value={value}
-              placeholder={d.placeholder}
-              dir="auto"
-              rows={4}
-              onChange={(e) => setValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                  e.preventDefault();
-                  finish(true);
-                }
-              }}
-            />
-          ) : (
+        {d.kind === "prompt" && (
             <input
               ref={input}
               value={value}
@@ -227,7 +302,7 @@ function DialogView({ d, close }: { d: Dialog; close: () => void }) {
               autoCapitalize="words"
               enterKeyHint="done"
             />
-          ))}
+          )}
         <div className="actions">
           <button type="button" className="btn ghost" onClick={() => finish(false)}>
             Cancel
@@ -237,6 +312,7 @@ function DialogView({ d, close }: { d: Dialog; close: () => void }) {
           </button>
         </div>
       </form>
+      )}
     </div>,
     document.body,
   );

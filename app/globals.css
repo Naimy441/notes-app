@@ -111,6 +111,16 @@ body.locked {
   left: 0;
   right: 0;
 }
+/* The open note paints the page behind it too, including the home-indicator
+   inset. A short fixed sheet otherwise leaves the canvas (white) showing. */
+html.note-open,
+html.note-open body {
+  background: var(--bg-elev);
+}
+html.note-open body.locked {
+  height: calc(100lvh + var(--lock-y, 0px) + env(safe-area-inset-bottom, 0px));
+  min-height: calc(100dvh + var(--lock-y, 0px) + env(safe-area-inset-bottom, 0px));
+}
 
 button {
   cursor: pointer;
@@ -1187,11 +1197,6 @@ mark.hit {
     transform: translateY(100%);
   }
 }
-@keyframes sheet-cover-out {
-  to {
-    transform: translateY(100%);
-  }
-}
 .editor.closing,
 .editor-backdrop.closing {
   animation: fade-out 0.18s var(--ease) forwards;
@@ -1200,12 +1205,26 @@ mark.hit {
   animation: sheet-out 0.24s var(--ease) forwards;
 }
 @media (max-width: 699px) {
-  .editor.closing {
-    animation: sheet-cover-out 0.22s var(--ease) forwards;
+  .editor {
+    /* Grow through the home-indicator inset so the note surface, not a
+       differently colored spacer, reaches the physical bottom. */
+    bottom: calc(-1 * env(safe-area-inset-bottom, 0px));
+    background: var(--bg-elev);
   }
-  .editor-backdrop.closing {
-    animation: none;
-    opacity: 1;
+  .editor-scroll {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-elev);
+  }
+  .note-body {
+    flex: 1;
+    min-height: 100%;
+    background: var(--bg-elev);
+  }
+  .note-body .cm-editor,
+  .note-body .cm-scroller {
+    min-height: 100%;
+    background: transparent;
   }
 }
 @keyframes sheet-in {
@@ -1309,7 +1328,6 @@ mark.hit {
 }
 .editor-title {
   width: 100%;
-  resize: none;
   background: transparent;
   outline: none;
   font-size: 22px;
@@ -1319,8 +1337,12 @@ mark.hit {
   color: var(--text);
   overflow: hidden;
   padding: 6px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-height: 1.28em;
 }
-.editor-title::placeholder {
+.editor-title:empty::before {
+  content: attr(data-placeholder);
   color: var(--muted);
 }
 .editor-title:dir(rtl) {
@@ -1337,6 +1359,19 @@ mark.hit {
 /* The note body (CodeMirror live preview; most styling lives in lib/livePreview.ts). */
 .note-body {
   min-height: 40vh;
+}
+@media (max-width: 699px) {
+  .editor-title {
+    flex: none;
+  }
+  .editor-scroll {
+    padding-bottom: max(28px, env(safe-area-inset-bottom, 0px));
+  }
+  .note-body {
+    flex: 1;
+    min-height: 100%;
+    background: var(--bg-elev);
+  }
 }
 .note-body .cm-editor {
   font-family: var(--font);
@@ -1605,6 +1640,42 @@ mark.hit {
   border: 1.5px solid transparent;
   resize: vertical;
   min-height: 96px;
+}
+.plain-field {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-y: auto;
+  max-height: 40vh;
+}
+.plain-field:empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted);
+}
+.plain-field:focus {
+  border-color: var(--accent);
+}
+/* Keyboard open: pin the sheet to the visible viewport and keep the actions in view. */
+.sheet-backdrop.above-kb {
+  align-items: flex-end !important;
+  padding: 8px 0 0;
+}
+.sheet-backdrop.above-kb .dialog {
+  width: 100%;
+  max-width: none;
+  max-height: 100%;
+  margin: 0;
+  border-radius: 22px 22px 0 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sheet-backdrop.above-kb .dialog .plain-field {
+  flex: 1 1 auto;
+  min-height: 72px;
+  max-height: none;
+}
+.sheet-backdrop.above-kb .dialog .actions {
+  flex: none;
 }
 .dialog .actions {
   display: flex;
@@ -1929,8 +2000,28 @@ html.theme-vt::view-transition-new(root) {
   font-weight: 650;
   color: var(--text-2);
 }
+.select-bar,
+.select-bar * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
 .select-bar .btn:disabled {
   opacity: 0.4;
+}
+html.suppress-select,
+html.suppress-select * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+@media (hover: none) and (pointer: coarse) {
+  .card,
+  .card * {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
 }
 .card.selecting {
   padding-left: 42px;

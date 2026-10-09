@@ -12,7 +12,6 @@ import { NoteBody, setRemoteText } from "./NoteBody";
 import {
   ArchiveIcon,
   BackIcon,
-  CheckboxIcon,
   CopyIcon,
   FolderIcon,
   LinkIcon,
@@ -48,27 +47,6 @@ function markdownLink(text: string, rawUrl: string) {
   url = url.replace(/ /g, "%20").replace(/\(/g, "%28").replace(/\)/g, "%29");
   if (!text) return `<${url}>`;
   return `[${text.replace(/([[\]\\])/g, "\\$1")}](${url})`;
-}
-
-/** iOS shows a checkmark and arrows above the keyboard for text fields. Refocusing past a readonly moment drops that bar. */
-function focusTitleWithoutAccessory(el: HTMLTextAreaElement, event: React.PointerEvent<HTMLTextAreaElement>) {
-  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-  if (!ios || document.activeElement === el) return;
-  event.preventDefault();
-  el.readOnly = true;
-  el.setAttribute("inputmode", "none");
-  el.focus();
-  window.setTimeout(() => {
-    el.readOnly = false;
-    el.setAttribute("inputmode", "text");
-    el.focus();
-  }, 40);
-}
-
-function autosize(el: HTMLTextAreaElement | null) {
-  if (!el) return;
-  el.style.height = "auto";
-  el.style.height = `${el.scrollHeight}px`;
 }
 
 /** Fit the sheet to the visual viewport while the keyboard is open, and keep the caret above it. */
@@ -124,14 +102,14 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
   const [picking, setPicking] = useState(false);
 
   const sheet = useRef<HTMLDivElement>(null);
-  const titleRef = useRef<HTMLTextAreaElement>(null);
+  const titleRef = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const [initialBody] = useState(body);
   const [aiUndo, setAiUndo] = useState<{ title: string; body: string } | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const revealCaret = useCallback(() => {
     const active = document.activeElement;
-    if (active instanceof HTMLTextAreaElement && sheet.current?.contains(active)) {
+    if (active instanceof HTMLElement && active.isContentEditable && sheet.current?.contains(active)) {
       const scroller = active.closest(".editor-scroll");
       if (scroller instanceof HTMLElement) {
         const caret = active.getBoundingClientRect();
@@ -165,7 +143,11 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
     if (remoteTitle !== undefined && document.activeElement !== titleRef.current) setTitle(remoteTitle);
   }, [remoteTitle]);
 
-  useLayoutEffect(() => autosize(titleRef.current), [title]);
+  useLayoutEffect(() => {
+    const el = titleRef.current;
+    if (!el || document.activeElement === el) return;
+    if ((el.textContent ?? "") !== title) el.textContent = title;
+  }, [title]);
   useEffect(() => {
     if (!isNew) return;
     // Focus after the open animation so iOS raises the keyboard reliably.
@@ -251,27 +233,6 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [picking]);
-
-  /** Toggle "- [ ] " on the current line; if the note isn't being edited, add a new checklist item at the end. */
-  const toggleChecklist = () => {
-    const v = view.current;
-    if (!v) return;
-    if (!v.hasFocus) {
-      const doc = v.state.doc.toString();
-      const insert = (doc && !doc.endsWith("\n") ? "\n" : "") + "- [ ] ";
-      v.dispatch({ changes: { from: doc.length, insert }, selection: { anchor: doc.length + insert.length }, scrollIntoView: true });
-      v.focus();
-      return;
-    }
-    const line = v.state.doc.lineAt(v.state.selection.main.head);
-    const task = /^(\s*)[-*+]\s+\[[ xX]\]\s?/.exec(line.text);
-    const plain = /^(\s*)(?:[-*+]\s+)?/.exec(line.text)!;
-    const change = task
-      ? { from: line.from + task[1].length, to: line.from + task[0].length, insert: "" }
-      : { from: line.from + plain[1].length, to: line.from + plain[0].length, insert: "- [ ] " };
-    v.dispatch({ changes: change });
-    v.focus();
-  };
 
   const applyText = (next: { title: string; body: string }) => {
     setTitle(next.title);
@@ -437,14 +398,6 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
           <div className="editor-tools">
             <button
               className="icon-btn"
-              aria-label="Checklist item"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={toggleChecklist}
-            >
-              <CheckboxIcon />
-            </button>
-            <button
-              className="icon-btn"
               aria-label="Add link"
               title="Add link (Ctrl/⌘ K)"
               onMouseDown={(e) => e.preventDefault()}
@@ -490,19 +443,26 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
         </div>
 
         <div className="editor-scroll">
-          <textarea
+          <div
             ref={titleRef}
             className="editor-title"
+            contentEditable
+            aria-label="Title"
+            data-placeholder="Title"
             dir="auto"
-            placeholder="Title"
-            rows={1}
-            value={title}
             spellCheck={false}
-            enterKeyHint="next"
             autoCorrect="on"
-            onPointerDown={(e) => focusTitleWithoutAccessory(e.currentTarget, e)}
-            onChange={(e) => {
-              const v = e.target.value.replace(/\n/g, " ");
+            suppressContentEditableWarning
+            onPaste={(e) => {
+              e.preventDefault();
+              const text = e.clipboardData.getData("text/plain").replace(/\s+/g, " ").trim();
+              if (text) document.execCommand("insertText", false, text);
+            }}
+            onInput={(e) => {
+              const el = e.currentTarget;
+              const v = (el.textContent ?? "").replace(/\n/g, " ");
+              if (!v) el.replaceChildren();
+              else if ((el.textContent ?? "") !== v) el.textContent = v;
               setTitle(v);
               save({ title: v });
             }}
