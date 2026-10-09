@@ -3,6 +3,8 @@
 import type { EditorView } from "@codemirror/view";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { baseName, longDate } from "@/lib/derive";
+import { scrollCaretIntoView } from "@/lib/editorKit";
+import { getAuthInstance } from "@/lib/firebase";
 import { createNote, discardNote, flushPending, newNoteId, purgeNotes, updateNote, useStore } from "@/lib/store";
 import type { Note } from "@/lib/types";
 import { FolderPicker } from "./FolderPicker";
@@ -17,11 +19,14 @@ import {
   MoreIcon,
   PinFilledIcon,
   PinIcon,
+  PromptIcon,
   RestoreIcon,
+  SparkIcon,
   TrashIcon,
   UnarchiveIcon,
+  UndoIcon,
 } from "./icons";
-import { confirm, linkPrompt, menu, toast } from "./overlays";
+import { confirm, linkPrompt, menu, prompt, toast } from "./overlays";
 
 interface Props {
   /** Existing note id, or "new" / "new:list" for a fresh draft. */
@@ -45,27 +50,54 @@ function markdownLink(text: string, rawUrl: string) {
   return `[${text.replace(/([[\]\\])/g, "\\$1")}](${url})`;
 }
 
+/** iOS shows a checkmark and arrows above the keyboard for text fields. Refocusing past a readonly moment drops that bar. */
+function focusTitleWithoutAccessory(el: HTMLTextAreaElement, event: React.PointerEvent<HTMLTextAreaElement>) {
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  if (!ios || document.activeElement === el) return;
+  event.preventDefault();
+  el.readOnly = true;
+  el.setAttribute("inputmode", "none");
+  el.focus();
+  window.setTimeout(() => {
+    el.readOnly = false;
+    el.setAttribute("inputmode", "text");
+    el.focus();
+  }, 40);
+}
+
 function autosize(el: HTMLTextAreaElement | null) {
   if (!el) return;
   el.style.height = "auto";
   el.style.height = `${el.scrollHeight}px`;
 }
 
-/** Keep the sheet above the iOS keyboard, which doesn't resize fixed elements. */
-function useVisualViewport(ref: React.RefObject<HTMLElement | null>) {
+/** Fit the sheet to the visual viewport while the keyboard is open, and keep the caret above it. */
+function useVisualViewport(ref: React.RefObject<HTMLElement | null>, onInset: () => void) {
   const [kb, setKb] = useState(false);
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
+    let timer = 0;
     const update = () => {
       const el = ref.current;
       if (!el) return;
       const mobile = window.innerWidth < 700;
-      if (mobile) {
-        el.style.setProperty("--vvh", `${vv.height}px`);
-        el.style.transform = vv.offsetTop ? `translateY(${vv.offsetTop}px)` : "";
+      const open = mobile && window.innerHeight - vv.height > 120;
+      if (open) {
+        el.style.top = `${vv.offsetTop}px`;
+        el.style.height = `${vv.height}px`;
+        el.style.bottom = "auto";
+        if (window.scrollY) window.scrollTo(0, 0);
+      } else {
+        el.style.top = "";
+        el.style.height = "";
+        el.style.bottom = "";
       }
-      setKb(vv.height < window.innerHeight - 120);
+      setKb(open);
+      if (mobile) {
+        window.clearTimeout(timer);
+        timer = window.setTimeout(onInset, open ? 60 : 0);
+      }
     };
     update();
     vv.addEventListener("resize", update);
@@ -73,8 +105,9 @@ function useVisualViewport(ref: React.RefObject<HTMLElement | null>) {
     return () => {
       vv.removeEventListener("resize", update);
       vv.removeEventListener("scroll", update);
+      window.clearTimeout(timer);
     };
-  }, [ref]);
+  }, [ref, onInset]);
   return kb;
 }
 
@@ -94,7 +127,30 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const view = useRef<EditorView | null>(null);
   const [initialBody] = useState(body);
-  const kb = useVisualViewport(sheet);
+  const [aiUndo, setAiUndo] = useState<{ title: string; body: string } | null>(null);
+  const [aiBusy, setAiBusy] = useState(false);
+  const revealCaret = useCallback(() => {
+    const active = document.activeElement;
+    if (active instanceof HTMLTextAreaElement && sheet.current?.contains(active)) {
+      const scroller = active.closest(".editor-scroll");
+      if (scroller instanceof HTMLElement) {
+        const caret = active.getBoundingClientRect();
+        const box = scroller.getBoundingClientRect();
+        if (caret.bottom > box.bottom - 28) scroller.scrollTop += caret.bottom - (box.bottom - 28);
+        else if (caret.top < box.top + 12) scroller.scrollTop -= box.top + 12 - caret.top;
+      }
+      return;
+    }
+    scrollCaretIntoView(view.current);
+  }, []);
+  const kb = useVisualViewport(sheet, revealCaret);
+  useEffect(() => {
+    const el = sheet.current;
+    if (!el) return;
+    const onFocus = () => window.setTimeout(revealCaret, 320);
+    el.addEventListener("focusin", onFocus);
+    return () => el.removeEventListener("focusin", onFocus);
+  }, [revealCaret]);
 
   // Pull in edits from other devices unless the user is typing in that field.
   const remoteBody = note?.body;
@@ -217,6 +273,68 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
     v.focus();
   };
 
+  const applyText = (next: { title: string; body: string }) => {
+    setTitle(next.title);
+    setBody(next.body);
+    const v = view.current;
+    if (v && v.state.doc.toString() !== next.body) {
+      v.dispatch({
+        changes: { from: 0, to: v.state.doc.length, insert: next.body },
+        selection: { anchor: next.body.length },
+      });
+    }
+    save({ title: next.title, body: next.body });
+  };
+
+  const runAi = async (instruction: string | null) => {
+    if (aiBusy) return;
+    if (!instruction && !title.trim() && !body.trim()) {
+      toast("Nothing to edit");
+      return;
+    }
+    const before = { title, body };
+    setAiBusy(true);
+    try {
+      const token = await getAuthInstance().currentUser?.getIdToken();
+      const res = await fetch("/api/ai", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ title, body, instruction }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { title?: unknown; body?: unknown; error?: string };
+      if (!res.ok || typeof data.title !== "string" || typeof data.body !== "string") {
+        throw new Error(data.error || "AI edit failed");
+      }
+      applyText({ title: data.title, body: data.body });
+      setAiUndo(before);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "AI edit failed");
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  const promptAi = async () => {
+    const text = await prompt({
+      title: "Edit with AI",
+      message: "Describe the change. Arabic words written in Latin letters are left as written.",
+      placeholder: "Make this a checklist",
+      ok: "Apply",
+      multiline: true,
+    });
+    if (text) runAi(text);
+  };
+
+  const undoAi = () => {
+    if (!aiUndo) return;
+    applyText(aiUndo);
+    setAiUndo(null);
+    toast("AI edit undone");
+  };
+
   const n = note;
   const act = (patch: Partial<Note>, msg: string, undo: Partial<Note>) => {
     if (!n) return;
@@ -277,39 +395,98 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
         aria-label={title || "Note"}
       >
         <div className="editor-top">
-          <button className="icon-btn" aria-label="Back" onClick={close}>
-            <BackIcon />
-          </button>
-          <div className="spacer" />
-          {n && (
-            <>
-              <button
-                className={`icon-btn${n.pinned ? " on" : ""}`}
-                aria-label={n.pinned ? "Unpin" : "Pin"}
-                onClick={() => updateNote(id, { pinned: !n.pinned }, { touch: false })}
-              >
-                {n.pinned ? <PinFilledIcon /> : <PinIcon />}
-              </button>
-              {!n.deleted && (
+          <div className="editor-nav">
+            <button className="icon-btn" aria-label="Back" onClick={close}>
+              <BackIcon />
+            </button>
+            <button className="folder-btn" onClick={() => setPicking(true)}>
+              <FolderIcon size={16} />
+              <span>{(n?.folder ?? defaultFolder) ? baseName(n?.folder ?? defaultFolder) : "No folder"}</span>
+            </button>
+            <div className="spacer" />
+            {n && (
+              <>
                 <button
-                  className="icon-btn"
-                  aria-label={n.archived ? "Unarchive" : "Archive"}
-                  onClick={() => {
-                    if (n.archived) act({ archived: false }, "Note unarchived", { archived: true });
-                    else {
-                      act({ archived: true, pinned: false }, "Note archived", { archived: false, pinned: n.pinned });
-                      onClose();
-                    }
-                  }}
+                  className={`icon-btn${n.pinned ? " on" : ""}`}
+                  aria-label={n.pinned ? "Unpin" : "Pin"}
+                  onClick={() => updateNote(id, { pinned: !n.pinned }, { touch: false })}
                 >
-                  {n.archived ? <UnarchiveIcon /> : <ArchiveIcon />}
+                  {n.pinned ? <PinFilledIcon /> : <PinIcon />}
                 </button>
-              )}
-              <button className="icon-btn" aria-label="More" onClick={(e) => more(e.currentTarget)}>
-                <MoreIcon />
-              </button>
-            </>
-          )}
+                {!n.deleted && (
+                  <button
+                    className="icon-btn"
+                    aria-label={n.archived ? "Unarchive" : "Archive"}
+                    onClick={() => {
+                      if (n.archived) act({ archived: false }, "Note unarchived", { archived: true });
+                      else {
+                        act({ archived: true, pinned: false }, "Note archived", { archived: false, pinned: n.pinned });
+                        onClose();
+                      }
+                    }}
+                  >
+                    {n.archived ? <UnarchiveIcon /> : <ArchiveIcon />}
+                  </button>
+                )}
+                <button className="icon-btn" aria-label="More" onClick={(e) => more(e.currentTarget)}>
+                  <MoreIcon />
+                </button>
+              </>
+            )}
+          </div>
+          <div className="editor-tools">
+            <button
+              className="icon-btn"
+              aria-label="Checklist item"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={toggleChecklist}
+            >
+              <CheckboxIcon />
+            </button>
+            <button
+              className="icon-btn"
+              aria-label="Add link"
+              title="Add link (Ctrl/⌘ K)"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={addLink}
+            >
+              <LinkIcon />
+            </button>
+            <button
+              className="icon-btn"
+              aria-label="Format and fix spelling"
+              title="Format and fix spelling"
+              disabled={aiBusy}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => runAi(null)}
+            >
+              <SparkIcon />
+            </button>
+            <button
+              className="icon-btn"
+              aria-label="Edit with AI"
+              title="Edit with a prompt"
+              disabled={aiBusy}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={promptAi}
+            >
+              <PromptIcon />
+            </button>
+            <button
+              className="icon-btn"
+              aria-label="Undo AI edit"
+              title="Undo AI edit"
+              disabled={!aiUndo || aiBusy}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={undoAi}
+            >
+              <UndoIcon />
+            </button>
+            <div className="spacer" />
+            <button className="when" onClick={() => setShowCreated((s) => !s)}>
+              {n ? (showCreated ? `Created ${longDate(n.createdAt)}` : `Edited ${longDate(n.updatedAt)}`) : ""}
+            </button>
+          </div>
         </div>
 
         <div className="editor-scroll">
@@ -320,7 +497,10 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
             placeholder="Title"
             rows={1}
             value={title}
+            spellCheck={false}
             enterKeyHint="next"
+            autoCorrect="on"
+            onPointerDown={(e) => focusTitleWithoutAccessory(e.currentTarget, e)}
             onChange={(e) => {
               const v = e.target.value.replace(/\n/g, " ");
               setTitle(v);
@@ -345,33 +525,6 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
               view.current = v;
             }}
           />
-        </div>
-
-        <div className="editor-bottom">
-          <button className="folder-btn" onClick={() => setPicking(true)}>
-            <FolderIcon size={16} />
-            <span>{(n?.folder ?? defaultFolder) ? baseName(n?.folder ?? defaultFolder) : "No folder"}</span>
-          </button>
-          <button className="when" onClick={() => setShowCreated((s) => !s)}>
-            {n ? (showCreated ? `Created ${longDate(n.createdAt)}` : `Edited ${longDate(n.updatedAt)}`) : ""}
-          </button>
-          <button
-            className="icon-btn"
-            aria-label="Checklist item"
-            onMouseDown={(e) => e.preventDefault()} // keep the cursor in the note
-            onClick={toggleChecklist}
-          >
-            <CheckboxIcon />
-          </button>
-          <button
-            className="icon-btn"
-            aria-label="Add link"
-            title="Add link (Ctrl/⌘ K)"
-            onMouseDown={(e) => e.preventDefault()} // keep the text selection on desktop
-            onClick={addLink}
-          >
-            <LinkIcon />
-          </button>
         </div>
       </div>
       {picking && (

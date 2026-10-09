@@ -1,4 +1,5 @@
 import MarkdownIt, { type StateCore, type StateInline } from "markdown-it";
+import { ARABIC_RUN } from "./bidi";
 
 // html: false escapes any raw HTML in notes, so rendered output is safe to inject.
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true, typographer: false });
@@ -57,6 +58,48 @@ md.core.ruler.push("bidi_lines", (state: StateCore) => {
     }
     out.push(close(), ...kids.slice(to));
     t.children = out;
+  }
+});
+
+// Arabic script renders a little larger than the surrounding Latin text.
+md.core.ruler.push("arabic_size", (state: StateCore) => {
+  for (const tok of state.tokens) {
+    const kids = tok.children;
+    if (tok.type !== "inline" || !kids) continue;
+    let changed = false;
+    const out = [];
+    for (const child of kids) {
+      ARABIC_RUN.lastIndex = 0;
+      if (child.type !== "text" || !ARABIC_RUN.test(child.content)) {
+        out.push(child);
+        continue;
+      }
+      changed = true;
+      ARABIC_RUN.lastIndex = 0;
+      let last = 0;
+      for (const m of child.content.matchAll(ARABIC_RUN)) {
+        const at = m.index ?? 0;
+        if (at > last) {
+          const plain = new state.Token("text", "", 0);
+          plain.content = child.content.slice(last, at);
+          out.push(plain);
+        }
+        const open = new state.Token("html_inline", "", 0);
+        open.content = '<span class="ar">';
+        const inner = new state.Token("text", "", 0);
+        inner.content = m[0];
+        const close = new state.Token("html_inline", "", 0);
+        close.content = "</span>";
+        out.push(open, inner, close);
+        last = at + m[0].length;
+      }
+      if (last < child.content.length) {
+        const plain = new state.Token("text", "", 0);
+        plain.content = child.content.slice(last);
+        out.push(plain);
+      }
+    }
+    if (changed) tok.children = out;
   }
 });
 

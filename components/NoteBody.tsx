@@ -5,7 +5,8 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxHighlighting } from "@codemirror/language";
 import { EditorState, Transaction } from "@codemirror/state";
 import { EditorView, keymap, placeholder } from "@codemirror/view";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
+import { bidiHitTest, bidiKeys, bidiLayout, readingRoom, scrollCaretIntoView } from "@/lib/editorKit";
 import { livePreview, markdownHighlight } from "@/lib/livePreview";
 
 interface Props {
@@ -28,13 +29,14 @@ export function NoteBody({ initial, onChange, onWikilink, onModEnter, onReady }:
     cb.current = { onChange, onWikilink, onModEnter };
   });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const view = new EditorView({
       parent: host.current!,
       state: EditorState.create({
         doc: initial,
         extensions: [
           history(),
+          bidiKeys(),
           keymap.of([
             { key: "Mod-Enter", run: () => (cb.current.onModEnter(), true) },
             ...defaultKeymap,
@@ -46,20 +48,40 @@ export function NoteBody({ initial, onChange, onWikilink, onModEnter, onReady }:
           markdown({ base: markdownLanguage }),
           syntaxHighlighting(markdownHighlight),
           livePreview({ onWikilink: (t) => cb.current.onWikilink(t) }),
+          bidiLayout(),
+          bidiHitTest(),
+          readingRoom(),
           EditorView.lineWrapping,
           // Each line picks its own direction, so Arabic lines read right-to-left.
           EditorView.perLineTextDirection.of(true),
-          EditorView.contentAttributes.of({ autocapitalize: "sentences", autocorrect: "on", spellcheck: "true", "aria-label": "Note" }),
+          EditorView.editorAttributes.of({ spellcheck: "false" }),
+          EditorView.contentAttributes.of({
+            dir: "ltr",
+            autocapitalize: "sentences",
+            autocorrect: "off",
+            spellcheck: "false",
+            "data-gramm": "false",
+            "data-gramm_editor": "false",
+            "data-enable-grammarly": "false",
+            "aria-label": "Note",
+          }),
           placeholder("Note"),
           EditorView.updateListener.of((u) => {
-            if (!u.docChanged) return;
+            const remote = u.transactions.every((tr) => tr.annotation(Transaction.remote));
+            if ((u.docChanged || u.selectionSet) && !remote) {
+              // CodeMirror scrolls its own scroller, which is not the sheet.
+              // Keep the caret in the sheet's scroller, with room underneath.
+              const view = u.view;
+              requestAnimationFrame(() => requestAnimationFrame(() => scrollCaretIntoView(view)));
+            }
+            if (!u.docChanged || remote) return;
             // Edits pulled in from another device aren't the user's typing; don't save them back.
-            if (u.transactions.every((tr) => tr.annotation(Transaction.remote))) return;
             cb.current.onChange(u.state.doc.toString());
           }),
         ],
       }),
     });
+    hideIosAccessory(view.contentDOM);
     onReady(view);
     return () => {
       onReady(null);
@@ -69,7 +91,23 @@ export function NoteBody({ initial, onChange, onWikilink, onModEnter, onReady }:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return <div ref={host} className="note-body" dir="auto" />;
+  return <div ref={host} className="note-body" dir="ltr" />;
+}
+
+/**
+ * iOS draws a keyboard accessory (checkmark, up/down arrows) for text fields.
+ * Swapping inputmode as focus lands is the web workaround that keeps the
+ * keyboard and drops that bar.
+ */
+function hideIosAccessory(el: HTMLElement) {
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  if (!ios) return;
+  el.setAttribute("inputmode", "text");
+  el.setAttribute("enterkeyhint", "enter");
+  el.addEventListener("focus", () => {
+    el.setAttribute("inputmode", "none");
+    window.setTimeout(() => el.setAttribute("inputmode", "text"), 40);
+  });
 }
 
 /** Replace the whole document with text from elsewhere (another device), keeping the cursor if possible. */

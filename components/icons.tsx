@@ -118,6 +118,19 @@ export const CopyIcon = make(
 );
 export const ChevronRightIcon = make(<path d="m9 6 6 6-6 6" />);
 export const CheckIcon = make(<path d="m5 12.5 4.5 4.5L19 7.5" />);
+export const SparkIcon = make(
+  <>
+    <path d="M12 3.5 13.4 8l4.6 1.4L13.4 11 12 15.5 10.6 11 6 9.4 10.6 8z" />
+    <path d="M17.5 13.5 18.2 16l2.5.7-2.5.8-.7 2.5-.8-2.5-2.5-.8 2.5-.7z" />
+  </>,
+);
+export const PromptIcon = make(
+  <>
+    <path d="M5 6.5h14v8.5H9l-4 3.5v-3.5H5z" />
+    <path d="M8.5 10h7M8.5 12.5h4" />
+  </>,
+);
+export const UndoIcon = make(<path d="M8 8H4.5V4.5M5 13.5a7 7 0 1 0 1.2-5.2L4.5 8" />);
 export const LinkIcon = make(
   <path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.3 1.3M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.3-1.3" />,
 );

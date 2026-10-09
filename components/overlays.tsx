@@ -18,7 +18,7 @@ interface MenuItem {
   run: () => void;
 }
 type Dialog =
-  | { kind: "prompt"; title: string; message?: string; initial?: string; placeholder?: string; ok?: string; resolve: (v: string | null) => void }
+  | { kind: "prompt"; title: string; message?: string; initial?: string; placeholder?: string; ok?: string; multiline?: boolean; resolve: (v: string | null) => void }
   | { kind: "confirm"; title: string; message?: string; ok?: string; danger?: boolean; resolve: (v: boolean) => void }
   | { kind: "link"; text: string; url: string; resolve: (v: { text: string; url: string } | null) => void };
 
@@ -145,11 +145,12 @@ function DialogView({ d, close }: { d: Dialog; close: () => void }) {
   const [value, setValue] = useState(d.kind === "prompt" ? (d.initial ?? "") : d.kind === "link" ? d.url : "");
   const [text, setText] = useState(d.kind === "link" ? d.text : "");
   const input = useRef<HTMLInputElement>(null);
+  const area = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
-    if (d.kind !== "confirm") {
-      input.current?.focus();
-      input.current?.select();
-    }
+    if (d.kind === "confirm") return;
+    const el = d.kind === "prompt" && d.multiline ? area.current : input.current;
+    el?.focus();
+    el?.select();
   }, [d]);
   const finish = (ok: boolean) => {
     close();
@@ -199,17 +200,34 @@ function DialogView({ d, close }: { d: Dialog; close: () => void }) {
             />
           </>
         )}
-        {d.kind === "prompt" && (
-          <input
-            ref={input}
-            value={value}
-            placeholder={d.placeholder}
-            dir="auto"
-            onChange={(e) => setValue(e.target.value)}
-            autoCapitalize="words"
-            enterKeyHint="done"
-          />
-        )}
+        {d.kind === "prompt" &&
+          (d.multiline ? (
+            <textarea
+              ref={area}
+              className="dialog-area"
+              value={value}
+              placeholder={d.placeholder}
+              dir="auto"
+              rows={4}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  finish(true);
+                }
+              }}
+            />
+          ) : (
+            <input
+              ref={input}
+              value={value}
+              placeholder={d.placeholder}
+              dir="auto"
+              onChange={(e) => setValue(e.target.value)}
+              autoCapitalize="words"
+              enterKeyHint="done"
+            />
+          ))}
         <div className="actions">
           <button type="button" className="btn ghost" onClick={() => finish(false)}>
             Cancel

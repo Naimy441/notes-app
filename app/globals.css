@@ -88,6 +88,7 @@ html {
   background: var(--bg);
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
+  overflow-anchor: none;
 }
 
 body {
@@ -100,10 +101,15 @@ body {
   -moz-osx-font-smoothing: grayscale;
   overscroll-behavior-y: none;
   min-height: 100dvh;
+  overflow-anchor: none;
 }
 
 body.locked {
   overflow: hidden;
+  position: fixed;
+  width: 100%;
+  left: 0;
+  right: 0;
 }
 
 button {
@@ -505,6 +511,9 @@ main.content {
   margin: 0 22px 6px 0;
   overflow-wrap: anywhere;
 }
+.card-title:dir(rtl) {
+  font-size: 18.5px;
+}
 .card-body {
   font-size: 14px;
   line-height: 1.48;
@@ -778,6 +787,9 @@ mark.hit {
   color: inherit;
   border-radius: 3px;
   padding: 0 1px;
+}
+.ar {
+  font-size: 1.22em;
 }
 
 .card-body.md h1,
@@ -1152,14 +1164,33 @@ mark.hit {
 .editor {
   position: fixed;
   z-index: 71;
-  left: 0;
-  right: 0;
-  top: 0;
-  height: var(--vvh, 100dvh);
+  inset: 0;
+  width: auto;
+  height: auto;
   display: flex;
   flex-direction: column;
   background: var(--bg-elev);
   animation: sheet-in 0.36s var(--ease);
+}
+@media (max-width: 699px) {
+  .editor-backdrop {
+    background: var(--bg-elev);
+    animation: none;
+  }
+  .editor {
+    background: var(--bg-elev);
+    animation: sheet-cover 0.34s var(--ease);
+  }
+}
+@keyframes sheet-cover {
+  from {
+    transform: translateY(100%);
+  }
+}
+@keyframes sheet-cover-out {
+  to {
+    transform: translateY(100%);
+  }
 }
 .editor.closing,
 .editor-backdrop.closing {
@@ -1167,6 +1198,15 @@ mark.hit {
 }
 .editor.closing {
   animation: sheet-out 0.24s var(--ease) forwards;
+}
+@media (max-width: 699px) {
+  .editor.closing {
+    animation: sheet-cover-out 0.22s var(--ease) forwards;
+  }
+  .editor-backdrop.closing {
+    animation: none;
+    opacity: 1;
+  }
 }
 @keyframes sheet-in {
   from {
@@ -1182,6 +1222,7 @@ mark.hit {
 }
 @media (min-width: 700px) {
   .editor {
+    inset: auto;
     left: 50%;
     top: 7vh;
     width: min(720px, 92vw);
@@ -1219,29 +1260,51 @@ mark.hit {
 
 .editor-top {
   display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: calc(var(--sat) + 6px) 8px 4px;
+  flex-direction: column;
+  gap: 0;
+  padding: calc(var(--sat) + 4px) 6px 2px;
   flex: none;
+  background: var(--bg-elev);
 }
 @media (min-width: 700px) {
   .editor-top {
-    padding-top: 8px;
+    padding-top: 6px;
   }
 }
-.editor-top .spacer {
+.editor-nav,
+.editor-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.editor-tools {
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 0 2px 4px;
+}
+.editor-tools::-webkit-scrollbar {
+  display: none;
+}
+.editor-nav .spacer,
+.editor-tools .spacer {
   flex: 1;
+}
+.editor-tools .icon-btn:disabled {
+  opacity: 0.35;
 }
 .editor-scroll {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overflow-anchor: none;
   overscroll-behavior: contain;
   padding: 2px 20px 28px;
   -webkit-overflow-scrolling: touch;
 }
 @media (min-width: 700px) {
   .editor-scroll {
-    padding: 4px 26px 28px;
+    padding: 4px 26px 42vh;
   }
 }
 .editor-title {
@@ -1259,6 +1322,17 @@ mark.hit {
 }
 .editor-title::placeholder {
   color: var(--muted);
+}
+.editor-title:dir(rtl) {
+  font-size: 26px;
+}
+.note-body ::spelling-error,
+.note-body ::grammar-error,
+.editor-title::spelling-error,
+.editor-title::grammar-error {
+  text-decoration: none !important;
+  background: none !important;
+  color: inherit;
 }
 /* The note body (CodeMirror live preview; most styling lives in lib/livePreview.ts). */
 .note-body {
@@ -1287,20 +1361,22 @@ mark.hit {
 .editor.kb .editor-bottom {
   padding-bottom: 6px;
 }
+.editor-tools .when,
 .editor-bottom .when {
-  flex: 1;
-  text-align: center;
+  flex: none;
+  text-align: right;
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  padding: 0 8px;
 }
 .folder-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  max-width: 34vw;
+  max-width: min(220px, 46vw);
   height: 34px;
   padding: 0 12px;
   border-radius: 999px;
@@ -1512,8 +1588,23 @@ mark.hit {
   border: 1.5px solid transparent;
   transition: border-color 0.15s;
 }
-.dialog input:focus {
+.dialog input:focus,
+.dialog textarea:focus {
   border-color: var(--accent);
+}
+.dialog-area {
+  width: 100%;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--field);
+  outline: none;
+  font: inherit;
+  font-size: 16px;
+  color: var(--text);
+  border: 1.5px solid transparent;
+  resize: vertical;
+  min-height: 96px;
 }
 .dialog .actions {
   display: flex;
@@ -1753,6 +1844,14 @@ mark.hit {
   animation-duration: 0.38s;
   border-radius: 18px;
   overflow: hidden;
+  background: var(--bg-elev);
+}
+html.note-vt::view-transition {
+  background: var(--bg);
+}
+html.note-vt::view-transition-old(root),
+html.note-vt::view-transition-new(root) {
+  animation: none;
 }
 ::view-transition-old(note-sheet),
 ::view-transition-new(note-sheet) {
@@ -1792,6 +1891,72 @@ html.theme-vt::view-transition-new(root) {
 }
 
 /* ───────────────────────── responsive helpers ───────────────────────── */
+
+.home-select-row {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 2px;
+}
+.text-btn {
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-weight: 650;
+  font-size: 14px;
+  color: var(--text-2);
+}
+.text-btn:hover {
+  background: var(--field);
+}
+.select-bar {
+  position: fixed;
+  z-index: 45;
+  left: 50%;
+  bottom: calc(var(--sab) + 16px);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(520px, calc(100vw - 20px));
+  padding: 8px 10px 8px 8px;
+  border-radius: 18px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  box-shadow: var(--sheet-shadow);
+}
+.select-bar span {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text-2);
+}
+.select-bar .btn:disabled {
+  opacity: 0.4;
+}
+.card.selecting {
+  padding-left: 42px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.card.selected {
+  border-color: var(--accent);
+}
+.card-check {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 2px solid var(--muted);
+  display: grid;
+  place-items: center;
+  background: var(--card);
+  color: var(--accent-ink);
+}
+.card.selected .card-check {
+  background: var(--accent);
+  border-color: var(--accent);
+}
 
 .desk-only {
   display: none !important;
