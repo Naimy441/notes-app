@@ -146,18 +146,20 @@ export function bidiKeys(): Extension {
   ]));
 }
 
-/** Keep the caret in the upper part of the editor, with room underneath. */
-export function readingRoom(): Extension {
-  return EditorView.scrollMargins.of((view) => {
-    const wide = window.innerWidth >= 700;
-    if (!wide) return { top: 12, bottom: 28 };
-    const scroller = view.dom.closest(".editor-scroll");
-    const h = scroller instanceof HTMLElement ? scroller.clientHeight : view.dom.clientHeight;
-    return { top: 48, bottom: Math.max(120, Math.round(Math.max(h, 240) * 0.36)) };
-  });
+/** A little space above the caret, and room for the next line underneath. */
+function caretBand() {
+  const mobile = window.innerWidth < 700;
+  return { top: mobile ? 16 : 28, bottom: mobile ? 72 : 88 };
 }
 
-/** Scroll the caret so it stays visible, leaving `room` pixels below it. */
+export function readingRoom(): Extension {
+  return EditorView.scrollMargins.of(() => caretBand());
+}
+
+/**
+ * Nudge the sheet's scroller only when the caret would leave the visible band.
+ * A caret that is already on screen stays where it is.
+ */
 export function scrollCaretIntoView(view: EditorView | null) {
   if (!view) return;
   const head = view.state.selection.main.head;
@@ -166,9 +168,9 @@ export function scrollCaretIntoView(view: EditorView | null) {
   const scroller = view.dom.closest(".editor-scroll");
   if (!(scroller instanceof HTMLElement)) return;
   const rect = scroller.getBoundingClientRect();
-  const mobile = window.innerWidth < 700;
-  const room = mobile ? 28 : Math.max(120, rect.height * 0.36);
-  const topPad = mobile ? 16 : 48;
-  if (coords.bottom > rect.bottom - room) scroller.scrollTop += coords.bottom - (rect.bottom - room);
-  else if (coords.top < rect.top + topPad) scroller.scrollTop -= rect.top + topPad - coords.top;
+  const { top, bottom } = caretBand();
+  const below = rect.bottom - bottom;
+  const above = rect.top + top;
+  if (coords.bottom > below) scroller.scrollTop += coords.bottom - below;
+  else if (coords.top < above) scroller.scrollTop -= above - coords.top;
 }

@@ -71,6 +71,8 @@ export function Sidebar({ route, tree, hue, counts, notes, user, onNavigate, onS
         </button>
       ))}
       <div className="nav-sep" />
+      <FileNotes tree={tree} hue={hue} notes={notes} />
+      <div className="nav-sep" />
       <button className={`nav-item${route.view === "archive" ? " active" : ""}`} onClick={() => go({ view: "archive" })}>
         <ArchiveIcon size={21} />
         <span>Archive</span>
@@ -110,8 +112,6 @@ export function Sidebar({ route, tree, hue, counts, notes, user, onNavigate, onS
           </button>
         ))}
       </div>
-      <div className="nav-sep" />
-      <FileNotes tree={tree} hue={hue} notes={notes} />
       <div className="nav-sep" />
       {user && (
         <button

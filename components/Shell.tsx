@@ -130,6 +130,15 @@ export function Shell({ user, onSignOut }: Props) {
     flushSync(() => releaseContent());
     const id = realId.current;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const phone = window.matchMedia("(max-width: 699px)").matches;
+    // A phone sheet is the whole page. Fading it out leaves the list where it
+    // is. Scaling that sheet onto a card, or snapshotting it with a view
+    // transition, moves the page itself.
+    if (phone) {
+      setClosing(true);
+      window.setTimeout(() => back({ note: null }), reduce ? 0 : 170);
+      return;
+    }
     // The grid repaints the released note after this handler. Read the card
     // on the following frame so the sheet travels to the card's real rect,
     // not the held-content one.

@@ -1356,6 +1356,17 @@ mark.hit {
     opacity: 0;
   }
 }
+@keyframes note-fade {
+  to {
+    opacity: 0;
+  }
+}
+@media (max-width: 699px) {
+  .editor.closing,
+  .editor-backdrop.closing {
+    animation: note-fade 160ms ease forwards;
+  }
+}
 @media (min-width: 700px) {
   .editor {
     inset: auto;
@@ -1440,7 +1451,7 @@ mark.hit {
 }
 @media (min-width: 700px) {
   .editor-scroll {
-    padding: 4px 26px 42vh;
+    padding: 4px 26px 120px;
   }
 }
 .editor-title {
@@ -1482,7 +1493,7 @@ mark.hit {
     flex: none;
   }
   .editor-scroll {
-    padding-bottom: max(28px, env(safe-area-inset-bottom, 0px));
+    padding-bottom: max(96px, env(safe-area-inset-bottom, 0px));
   }
   .note-body {
     flex: 1;

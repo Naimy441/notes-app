@@ -111,10 +111,10 @@ export function NoteBody({ initial, onChange, onWikilink, onModEnter, onReady }:
           EditorView.updateListener.of((u) => {
             const remote = u.transactions.every((tr) => tr.annotation(Transaction.remote));
             if ((u.docChanged || u.selectionSet) && !remote) {
-              // CodeMirror scrolls its own scroller, which is not the sheet.
-              // Keep the caret in the sheet's scroller, with room underneath.
+              // CodeMirror's own scroller does not scroll the sheet. One frame
+              // later, move the sheet only if the caret has left the visible band.
               const view = u.view;
-              requestAnimationFrame(() => requestAnimationFrame(() => scrollCaretIntoView(view)));
+              requestAnimationFrame(() => scrollCaretIntoView(view));
             }
             if (!u.docChanged || remote) return;
             // Edits pulled in from another device aren't the user's typing; don't save them back.

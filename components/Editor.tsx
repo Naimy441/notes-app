@@ -50,40 +50,44 @@ function markdownLink(text: string, rawUrl: string) {
   return `[${text.replace(/([[\]\\])/g, "\\$1")}](${url})`;
 }
 
-/** Fit the sheet to the visual viewport while the keyboard is open, and keep the caret above it. */
+/**
+ * Fit the sheet to the keyboard when it opens or closes.
+ * Visual-viewport scroll events are the browser chasing the caret; moving the
+ * sheet with them throws the whole note upward, especially after a paste.
+ */
 function useVisualViewport(ref: React.RefObject<HTMLElement | null>, onInset: () => void) {
   const [kb, setKb] = useState(false);
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
     let timer = 0;
-    const update = () => {
+    const place = () => {
       const el = ref.current;
-      if (!el) return;
+      if (!el) return false;
       const mobile = window.innerWidth < 700;
       const open = mobile && window.innerHeight - vv.height > 120;
       if (open) {
         el.style.top = `${vv.offsetTop}px`;
         el.style.height = `${vv.height}px`;
         el.style.bottom = "auto";
-        if (window.scrollY) window.scrollTo(0, 0);
       } else {
         el.style.top = "";
         el.style.height = "";
         el.style.bottom = "";
       }
       setKb(open);
-      if (mobile) {
-        window.clearTimeout(timer);
-        timer = window.setTimeout(onInset, open ? 60 : 0);
-      }
+      return open;
     };
-    update();
-    vv.addEventListener("resize", update);
-    vv.addEventListener("scroll", update);
+    const onResize = () => {
+      const open = place();
+      if (window.innerWidth >= 700) return;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(onInset, open ? 60 : 0);
+    };
+    place();
+    vv.addEventListener("resize", onResize);
     return () => {
-      vv.removeEventListener("resize", update);
-      vv.removeEventListener("scroll", update);
+      vv.removeEventListener("resize", onResize);
       window.clearTimeout(timer);
     };
   }, [ref, onInset]);
@@ -110,10 +114,21 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
   const [aiBusy, setAiBusy] = useState(false);
   const revealCaret = useCallback(() => {
     const active = document.activeElement;
-    if (active instanceof HTMLElement && active.isContentEditable && sheet.current?.contains(active)) {
+    // The note body is one contenteditable the size of the whole note. Its box
+    // is not the caret — scrolling that box into view throws the window to the
+    // top, and a paste makes the box even taller. The title is a short field,
+    // so its own rect is the line being edited.
+    if (
+      active instanceof HTMLElement &&
+      active.isContentEditable &&
+      sheet.current?.contains(active) &&
+      !active.classList.contains("cm-content")
+    ) {
       const scroller = active.closest(".editor-scroll");
       if (scroller instanceof HTMLElement) {
-        const caret = active.getBoundingClientRect();
+        const sel = document.getSelection();
+        const range = sel && sel.rangeCount && active.contains(sel.anchorNode) ? sel.getRangeAt(0).getClientRects() : null;
+        const caret = range && range.length ? range[range.length - 1] : active.getBoundingClientRect();
         const box = scroller.getBoundingClientRect();
         if (caret.bottom > box.bottom - 28) scroller.scrollTop += caret.bottom - (box.bottom - 28);
         else if (caret.top < box.top + 12) scroller.scrollTop -= box.top + 12 - caret.top;

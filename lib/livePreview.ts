@@ -4,8 +4,9 @@
  * `[](url)`, `> `, …) are hidden except on the line(s) the cursor is on, bullets
  * render as dots and task markers as real, tappable checkboxes.
  */
+import type { SyntaxNode } from "@lezer/common";
 import { syntaxTree } from "@codemirror/language";
-import type { Extension, Range } from "@codemirror/state";
+import { EditorState, StateField, type Extension, Range, Text } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { HighlightStyle } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
@@ -58,6 +59,136 @@ class BulletWidget extends WidgetType {
 const bullet = Decoration.replace({ widget: new BulletWidget() });
 const hide = Decoration.replace({});
 
+type Align = "left" | "center" | "right";
+
+class CodeWidget extends WidgetType {
+  constructor(
+    readonly code: string,
+    readonly info: string,
+  ) {
+    super();
+  }
+  eq(other: CodeWidget) {
+    return other.code === this.code && other.info === this.info;
+  }
+  toDOM() {
+    const pre = document.createElement("pre");
+    pre.className = "cm-rendered-code";
+    if (this.info) {
+      const lang = document.createElement("span");
+      lang.className = "cm-code-lang";
+      lang.textContent = this.info;
+      pre.append(lang);
+    }
+    const code = document.createElement("code");
+    code.textContent = this.code;
+    pre.append(code);
+    return pre;
+  }
+  ignoreEvent() {
+    return false;
+  }
+}
+
+class TableWidget extends WidgetType {
+  constructor(
+    readonly header: string[],
+    readonly rows: string[][],
+    readonly align: Align[],
+  ) {
+    super();
+  }
+  eq(other: TableWidget) {
+    return sameCells(other.header, this.header) && other.rows.length === this.rows.length && other.rows.every((row, i) => sameCells(row, this.rows[i])) && other.align.join() === this.align.join();
+  }
+  toDOM() {
+    const wrap = document.createElement("div");
+    wrap.className = "cm-md-table-wrap";
+    const table = document.createElement("table");
+    table.className = "cm-md-table";
+    if (this.header.length) {
+      const thead = document.createElement("thead");
+      thead.append(tableRow("th", this.header, this.align));
+      table.append(thead);
+    }
+    const body = document.createElement("tbody");
+    for (const row of this.rows) body.append(tableRow("td", row, this.align));
+    table.append(body);
+    wrap.append(table);
+    return wrap;
+  }
+  ignoreEvent() {
+    return false;
+  }
+}
+
+function sameCells(a: string[], b: string[]) {
+  return a.length === b.length && a.every((cell, i) => cell === b[i]);
+}
+
+function tableRow(tag: "th" | "td", cells: string[], align: Align[]) {
+  const tr = document.createElement("tr");
+  cells.forEach((text, i) => {
+    const cell = document.createElement(tag);
+    cell.textContent = text;
+    cell.style.textAlign = align[i] ?? "left";
+    tr.append(cell);
+  });
+  return tr;
+}
+
+function blockRange(doc: Text, from: number, to: number) {
+  const start = doc.lineAt(from).from;
+  const end = doc.lineAt(Math.max(from, to - 1)).to;
+  return { from: start, to: Math.max(start, end) };
+}
+
+function selectionTouches(view: EditorView, from: number, to: number) {
+  return view.state.selection.ranges.some((r) => r.from <= to && r.to >= from);
+}
+
+function childText(node: SyntaxNode, state: EditorState, name: string) {
+  let text = "";
+  for (let c = node.firstChild; c; c = c.nextSibling) {
+    if (c.name === name) text += state.sliceDoc(c.from, c.to);
+  }
+  return text.replace(/\n$/, "");
+}
+
+function tableCells(row: SyntaxNode, state: EditorState) {
+  const cells: string[] = [];
+  for (let c = row.firstChild; c; c = c.nextSibling) {
+    if (c.name === "TableCell") cells.push(state.sliceDoc(c.from, c.to).replace(/\s+/g, " ").trim());
+  }
+  return cells;
+}
+
+function tableAlign(text: string): Align[] {
+  return text
+    .split("|")
+    .map((cell) => cell.trim())
+    .filter(Boolean)
+    .map((cell) => {
+      const left = cell.startsWith(":");
+      const right = cell.endsWith(":");
+      if (left && right) return "center";
+      if (right) return "right";
+      return "left";
+    });
+}
+
+function tableModel(node: SyntaxNode, state: EditorState) {
+  let header: string[] = [];
+  const rows: string[][] = [];
+  let align: Align[] = [];
+  for (let c = node.firstChild; c; c = c.nextSibling) {
+    if (c.name === "TableHeader") header = tableCells(c, state);
+    else if (c.name === "TableRow") rows.push(tableCells(c, state));
+    else if (c.name === "TableDelimiter" && state.sliceDoc(c.from, c.to).includes("-")) align = tableAlign(state.sliceDoc(c.from, c.to));
+  }
+  return { header, rows, align };
+}
+
 // ─── decorations ─────────────────────────────────────────────────────────────
 
 /** Lines the cursor/selection touches; markup stays visible there so it can be edited. */
@@ -82,6 +213,9 @@ function build(view: EditorView): { decorations: DecorationSet; atomic: Decorati
   const isActive = (pos: number) => active.has(doc.lineAt(pos).number);
   const out: Range<Decoration>[] = [];
   const atomic: Range<Decoration>[] = [];
+  const covered: { from: number; to: number }[] = [];
+  const cover = (from: number, to: number) => covered.push({ from, to });
+  const insideCover = (from: number, to: number) => covered.some((r) => from < r.to && to > r.from);
   /** Hide [from,to) plus one following space, unless the cursor is on that line. */
   const hideMark = (from: number, to: number, withSpace = false) => {
     if (isActive(from)) return;
@@ -127,13 +261,25 @@ function build(view: EditorView): { decorations: DecorationSet; atomic: Decorati
             }
             return;
           }
-          case "FencedCode": {
-            for (let pos = node.from; pos <= node.to; ) {
-              const line = doc.lineAt(pos);
-              out.push(lineClass("cm-codeblock").range(line.from));
-              pos = line.to + 1;
+          case "FencedCode":
+          case "CodeBlock":
+          case "Table": {
+            const range = blockRange(doc, node.from, node.to);
+            if (!selectionTouches(view, range.from, range.to)) {
+              // The rendered block comes from a state-field decoration. A view
+              // plugin is not allowed to supply block widgets, and marks inside
+              // the replaced lines would overlap that widget.
+              cover(range.from, range.to);
+              return false;
             }
-            return false; // nothing to hide inside code
+            if (name === "FencedCode") {
+              for (let pos = node.from; pos <= node.to; ) {
+                const line = doc.lineAt(pos);
+                out.push(lineClass("cm-codeblock").range(line.from));
+                pos = line.to + 1;
+              }
+            }
+            return false;
           }
           case "HorizontalRule": {
             const line = doc.lineAt(node.from);
@@ -193,6 +339,7 @@ function build(view: EditorView): { decorations: DecorationSet; atomic: Decorati
     for (const m of text.matchAll(WIKILINK)) {
       const start = from + m.index!;
       const end = start + m[0].length;
+      if (insideCover(start, end)) continue;
       const target = m[1].trim();
       const labelFrom = m[2] ? start + 2 + m[1].length + 1 : start + 2;
       const labelTo = end - 2;
@@ -277,6 +424,23 @@ const theme = EditorView.theme({
   ".cm-h3": { fontSize: "1.1em" },
   ".cm-quote": { borderInlineStart: "3px solid var(--border-strong)", paddingInlineStart: "0.8em", color: "var(--muted)" },
   ".cm-codeblock": { fontFamily: "var(--mono)", fontSize: "0.88em", backgroundColor: "var(--field)", paddingInline: "10px" },
+  ".cm-rendered-code": {
+    fontFamily: "var(--mono)",
+    fontSize: "0.85em",
+    lineHeight: "1.45",
+    backgroundColor: "var(--field)",
+    padding: "10px 12px",
+    borderRadius: "10px",
+    margin: "0.35em 0 0.7em",
+    overflowX: "auto",
+    whiteSpace: "pre",
+  },
+  ".cm-rendered-code code": { fontFamily: "inherit", fontSize: "inherit", background: "none", padding: 0 },
+  ".cm-code-lang": { display: "block", marginBottom: "6px", color: "var(--muted)", fontFamily: "var(--font)", fontSize: "11px", fontWeight: "650", letterSpacing: "0.04em", textTransform: "uppercase" },
+  ".cm-md-table-wrap": { overflowX: "auto", margin: "0.45em 0 0.75em" },
+  ".cm-md-table": { borderCollapse: "collapse", fontSize: "0.92em", width: "max-content", maxWidth: "100%" },
+  ".cm-md-table th, .cm-md-table td": { border: "1px solid var(--border-strong)", padding: "4px 8px", verticalAlign: "top" },
+  ".cm-md-table th": { fontWeight: "700" },
   ".cm-hr": { position: "relative" },
   ".cm-hr::after": { content: '""', position: "absolute", insetInline: "0", top: "50%", borderTop: "1px solid var(--border-strong)" },
   ".cm-bullet": { color: "var(--muted)", display: "inline-block", minWidth: "0.9em", fontWeight: "700" },
@@ -308,6 +472,39 @@ const theme = EditorView.theme({
   ".cm-wikilink": { textDecorationStyle: "dotted" },
 });
 
+function cursorInside(state: EditorState, from: number, to: number) {
+  return state.selection.ranges.some((r) => r.from <= to && r.to >= from);
+}
+
+/** Tables and fenced code, drawn as blocks whenever the caret is outside them. */
+function renderBlocks(state: EditorState): DecorationSet {
+  const out: Range<Decoration>[] = [];
+  syntaxTree(state).iterate({
+    enter(node) {
+      if (node.name !== "FencedCode" && node.name !== "CodeBlock" && node.name !== "Table") return;
+      const range = blockRange(state.doc, node.from, node.to);
+      if (range.to <= range.from || cursorInside(state, range.from, range.to)) return false;
+      if (node.name === "Table") {
+        const model = tableModel(node.node, state);
+        out.push(Decoration.replace({ widget: new TableWidget(model.header, model.rows, model.align), block: true }).range(range.from, range.to));
+      } else {
+        const info = node.name === "FencedCode" ? childText(node.node, state, "CodeInfo").trim() : "";
+        out.push(Decoration.replace({ widget: new CodeWidget(childText(node.node, state, "CodeText"), info), block: true }).range(range.from, range.to));
+      }
+      return false;
+    },
+  });
+  return Decoration.set(out, true);
+}
+
+const renderedBlocks = StateField.define<DecorationSet>({
+  create: renderBlocks,
+  update(deco, tr) {
+    return tr.docChanged || tr.selection ? renderBlocks(tr.state) : deco.map(tr.changes);
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
 export function livePreview(opts: { onWikilink: (target: string) => void }): Extension {
-  return [livePreviewPlugin, linkClicks(opts.onWikilink), theme];
+  return [renderedBlocks, livePreviewPlugin, linkClicks(opts.onWikilink), theme];
 }
