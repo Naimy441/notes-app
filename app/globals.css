@@ -1963,11 +1963,6 @@ html.theme-vt::view-transition-new(root) {
 
 /* ───────────────────────── responsive helpers ───────────────────────── */
 
-.home-select-row {
-  display: flex;
-  justify-content: flex-end;
-  margin: 0 0 2px;
-}
 .text-btn {
   padding: 6px 12px;
   border-radius: 999px;

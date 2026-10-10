@@ -448,18 +448,7 @@ export function Shell({ user, onSignOut }: Props) {
       />
     );
   } else if (route.view === "notes") {
-    content = (
-      <>
-        {live.length > 0 && !selecting && (
-          <div className="home-select-row">
-            <button className="text-btn" onClick={() => setSelecting(true)}>
-              Select
-            </button>
-          </div>
-        )}
-        <PinnedAndOthers notes={live} resetKey="notes" showFolder gridProps={gridProps} empty="Notes you add appear here" />
-      </>
-    );
+    content = <PinnedAndOthers notes={live} resetKey="notes" showFolder gridProps={gridProps} empty="Notes you add appear here" />;
   } else if (route.view === "folders") {
     content = (
       <FolderView
