@@ -1,4 +1,5 @@
 import { connection } from "next/server";
+import { filingPayload, sanitizePlacements, type FilingNoteInput } from "@/lib/filing";
 import { OWNER_EMAIL, WEB_API_KEY } from "@/lib/firebase";
 
 export async function POST(req: Request) {
@@ -12,12 +13,14 @@ export async function POST(req: Request) {
     return Response.json({ error: "OPENAI_API_KEY is not configured." }, { status: 503 });
   }
 
-  let payload: { title?: unknown; body?: unknown; instruction?: unknown };
+  let payload: { action?: unknown; title?: unknown; body?: unknown; instruction?: unknown; folders?: unknown; notes?: unknown };
   try {
     payload = await req.json();
   } catch {
     return Response.json({ error: "Invalid request." }, { status: 400 });
   }
+
+  if (payload.action === "file") return fileNotes(payload, key);
 
   const title = typeof payload.title === "string" ? payload.title.slice(0, 500) : "";
   const body = typeof payload.body === "string" ? payload.body.slice(0, 100_000) : "";
@@ -77,6 +80,80 @@ Do not correct Arabic transliterations (Arabic words written with Latin letters)
     return Response.json({ title: nextTitle, body: nextBody });
   } catch {
     return Response.json({ error: "AI edit failed." }, { status: 502 });
+  }
+}
+
+/** Suggest existing folders for unfiled notes. Does not create folders or rewrite text. */
+async function fileNotes(payload: { folders?: unknown; notes?: unknown }, key: string) {
+  if (!Array.isArray(payload.folders) || !Array.isArray(payload.notes)) {
+    return Response.json({ error: "Invalid request." }, { status: 400 });
+  }
+
+  const notes: FilingNoteInput[] = [];
+  for (const n of payload.notes) {
+    if (!n || typeof n !== "object") continue;
+    const rec = n as { id?: unknown; title?: unknown; body?: unknown };
+    if (typeof rec.id !== "string" || !rec.id.trim()) continue;
+    notes.push({
+      id: rec.id,
+      title: typeof rec.title === "string" ? rec.title : "",
+      body: typeof rec.body === "string" ? rec.body : "",
+    });
+  }
+  const folders = payload.folders.filter((f): f is string => typeof f === "string");
+  const request = filingPayload(folders, notes);
+  if (!request.folders.length) return Response.json({ error: "No folders to file into." }, { status: 400 });
+  if (!request.notes.length) return Response.json({ error: "Nothing to file." }, { status: 400 });
+
+  const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+  const system = `You file notes into folders that already exist. Return JSON {"placements":[{"id":string,"folder":string|null}]} only.
+Choose folder only from the given paths, copied exactly. Never invent, rename, or create a folder.
+Never rewrite a note. Use null when no listed folder is a clear fit — leaving a note unfiled is correct.
+Include every note id exactly once. No commentary, fences, or other keys.`;
+
+  const listed = request.notes
+    .map((n) => `id: ${n.id}\ntitle: ${n.title}\nbody:\n${n.body}`)
+    .join("\n---\n");
+  const user = `Folders:\n${request.folders.map((f) => `- ${f}`).join("\n")}\n\nUnfiled notes:\n${listed}`;
+
+  let upstream: Response;
+  try {
+    upstream = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+      }),
+    });
+  } catch {
+    return Response.json({ error: "Couldn't reach the AI service." }, { status: 502 });
+  }
+
+  if (!upstream.ok) return Response.json({ error: "AI filing failed." }, { status: 502 });
+
+  const data = await upstream.json();
+  const text = data?.choices?.[0]?.message?.content;
+  if (typeof text !== "string") return Response.json({ error: "AI filing failed." }, { status: 502 });
+
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    const placements = sanitizePlacements(
+      request.folders,
+      request.notes.map((n) => n.id),
+      parsed,
+    );
+    return Response.json({ placements });
+  } catch {
+    return Response.json({ error: "AI filing failed." }, { status: 502 });
   }
 }
 

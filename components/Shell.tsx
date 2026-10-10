@@ -499,7 +499,7 @@ export function Shell({ user, onSignOut }: Props) {
     );
   }
 
-  const sidebarProps = { route, tree, hue, counts, user, onSignOut };
+  const sidebarProps = { route, tree, hue, counts, notes: allNotes, user, onSignOut };
 
   return (
     <SelectProvider value={selectApi}>

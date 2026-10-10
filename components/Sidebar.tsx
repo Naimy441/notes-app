@@ -1,24 +1,29 @@
 "use client";
 
 import type { User } from "firebase/auth";
+import { useMemo, useRef, useState } from "react";
+import { getAuthInstance } from "@/lib/firebase";
+import { filingPayload, noteLabel, sanitizePlacements, type Placement } from "@/lib/filing";
 import { applyTheme, setPref, usePrefs } from "@/lib/prefs";
 import { navigate, type Route } from "@/lib/router";
-import type { FolderNode, ThemePref } from "@/lib/types";
+import { getState, updateNote } from "@/lib/store";
+import type { FolderNode, Note, ThemePref } from "@/lib/types";
 import { themeTransition } from "@/lib/vt";
-import { ArchiveIcon, FolderIcon, LogoutIcon, MoonIcon, NotesIcon, SunIcon, SystemIcon, TrashIcon } from "./icons";
-import { confirm } from "./overlays";
+import { ArchiveIcon, FolderIcon, LogoutIcon, MoonIcon, NotesIcon, SparkIcon, SunIcon, SystemIcon, TrashIcon } from "./icons";
+import { confirm, toast } from "./overlays";
 
 interface Props {
   route: Route;
   tree: Map<string, FolderNode>;
   hue: (path: string) => number;
   counts: { notes: number; archive: number; trash: number };
+  notes: Note[];
   user: User | null;
   onNavigate?: () => void;
   onSignOut: () => void;
 }
 
-export function Sidebar({ route, tree, hue, counts, user, onNavigate, onSignOut }: Props) {
+export function Sidebar({ route, tree, hue, counts, notes, user, onNavigate, onSignOut }: Props) {
   const prefs = usePrefs();
   const go = (r: Partial<Route>) => {
     navigate({ note: null, q: null, ...r });
@@ -106,6 +111,8 @@ export function Sidebar({ route, tree, hue, counts, user, onNavigate, onSignOut 
         ))}
       </div>
       <div className="nav-sep" />
+      <FileNotes tree={tree} hue={hue} notes={notes} />
+      <div className="nav-sep" />
       {user && (
         <button
           className="nav-item"
@@ -122,5 +129,195 @@ export function Sidebar({ route, tree, hue, counts, user, onNavigate, onSignOut 
         </button>
       )}
     </nav>
+  );
+}
+
+function folderPaths(tree: Map<string, FolderNode>): string[] {
+  const out: string[] = [];
+  const walk = (path: string) => {
+    const node = tree.get(path);
+    if (!node) return;
+    for (const child of node.children) {
+      out.push(child);
+      walk(child);
+    }
+  };
+  walk("");
+  return out;
+}
+
+function FileNotes({ tree, hue, notes }: { tree: Map<string, FolderNode>; hue: (path: string) => number; notes: Note[] }) {
+  const paths = useMemo(() => folderPaths(tree), [tree]);
+  const unfiled = useMemo(
+    () =>
+      notes
+        .filter((n) => !n.deleted && n.folder === "")
+        .sort((a, b) => noteLabel(a).localeCompare(noteLabel(b), undefined, { sensitivity: "base" }) || b.updatedAt - a.updatedAt),
+    [notes],
+  );
+  const [plan, setPlan] = useState<Placement[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const request = useRef(0);
+
+  const byId = useMemo(() => new Map(unfiled.map((n) => [n.id, n])), [unfiled]);
+  const shown = useMemo(() => {
+    if (!plan) return null;
+    return plan
+      .filter((p) => byId.has(p.id))
+      .map((p) => ({ ...p, folder: p.folder && tree.has(p.folder) ? p.folder : null }));
+  }, [plan, byId, tree]);
+  const fileable = shown?.filter((p) => p.folder).length ?? 0;
+  const staying = shown?.filter((p) => !p.folder).length ?? 0;
+
+  const ask = async () => {
+    if (busy || !paths.length || !unfiled.length) return;
+    const tokenId = ++request.current;
+    setBusy(true);
+    setPlan(null);
+    try {
+      const token = await getAuthInstance().currentUser?.getIdToken();
+      const payload = filingPayload(paths, unfiled);
+      const res = await fetch("/api/ai", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = (await res.json().catch(() => ({}))) as { placements?: unknown; error?: string };
+      if (request.current !== tokenId) return;
+      if (!res.ok) throw new Error(data.error || "AI filing failed");
+      const sent = new Set(payload.notes.map((n) => n.id));
+      const placements = sanitizePlacements(payload.folders, payload.notes.map((n) => n.id), data);
+      const overflow = unfiled.filter((n) => !sent.has(n.id)).map((n) => ({ id: n.id, folder: null }));
+      setPlan([...placements, ...overflow]);
+    } catch (e) {
+      if (request.current !== tokenId) return;
+      toast(e instanceof Error ? e.message : "AI filing failed");
+    } finally {
+      if (request.current === tokenId) setBusy(false);
+    }
+  };
+
+  const cancel = () => {
+    request.current += 1;
+    setBusy(false);
+    setPlan(null);
+  };
+
+  const apply = () => {
+    if (!shown) return;
+    const latest = getState();
+    let filed = 0;
+    let stayed = 0;
+    for (const item of shown) {
+      const note = latest.notes.get(item.id);
+      if (!note || note.deleted || note.folder) continue;
+      if (!item.folder || !tree.has(item.folder)) {
+        stayed++;
+        continue;
+      }
+      updateNote(item.id, { folder: item.folder }, { touch: false });
+      filed++;
+    }
+    setPlan(null);
+    const moved = filed ? `Filed ${filed} ${filed === 1 ? "note" : "notes"}` : "";
+    const left = stayed ? `${stayed} ${stayed === 1 ? "note stays" : "notes stay"} unfiled` : "";
+    toast([moved, left].filter(Boolean).join(". ") || "Nothing to file");
+  };
+
+  return (
+    <section className="filing" aria-label="File notes">
+      <div className="nav-heading">File notes</div>
+      <div className="filing-label">Folders</div>
+      <div className="filing-scroll" role="list" aria-label="All folders">
+        {paths.length === 0 && <p className="filing-empty">No folders yet</p>}
+        {paths.map((p) => {
+          const node = tree.get(p);
+          if (!node) return null;
+          const depth = p.split("/").length - 1;
+          return (
+            <div key={p} className="filing-row" role="listitem" style={{ paddingLeft: 8 + Math.min(depth, 6) * 12 }}>
+              <i className="dot" style={{ background: `hsl(${hue(p)} 60% 58%)` }} />
+              <span className="filing-name" dir="auto">
+                {node.name}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="filing-label">
+        {shown ? "Suggested" : "Unfiled"}
+        {!shown && unfiled.length > 0 && <span className="filing-count">{unfiled.length}</span>}
+      </div>
+      {shown ? (
+        <div className="filing-scroll" role="list" aria-label="Suggested filing">
+          {shown.map((p) => {
+            const note = byId.get(p.id);
+            if (!note) return null;
+            return (
+              <div key={p.id} className={`filing-row plan${p.folder ? "" : " stay"}`} role="listitem">
+                <span className="filing-name" dir="auto">
+                  {noteLabel(note)}
+                  {note.archived ? <small className="filing-tag">Archived</small> : null}
+                </span>
+                {p.folder ? (
+                  <span className="filing-dest" dir="auto">
+                    {p.folder}
+                  </span>
+                ) : (
+                  <span className="filing-stay">Stays unfiled</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="filing-scroll" role="list" aria-label="Unfiled notes">
+          {unfiled.length === 0 && <p className="filing-empty">No unfiled notes</p>}
+          {unfiled.map((n) => (
+            <div key={n.id} className="filing-row" role="listitem">
+              <span className="filing-name" dir="auto">
+                {noteLabel(n)}
+                {n.archived ? <small className="filing-tag">Archived</small> : null}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {shown ? (
+        <>
+          {staying > 0 && (
+            <p className="filing-callout">
+              {staying === 1 ? "1 note stays unfiled" : `${staying} notes stay unfiled`}
+            </p>
+          )}
+          <div className="filing-actions">
+            <button type="button" className="btn primary" disabled={fileable === 0} onClick={apply}>
+              File notes
+            </button>
+            <button type="button" className="btn ghost" onClick={cancel}>
+              Cancel
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <button
+            type="button"
+            className="nav-item filing-go"
+            aria-label="File with AI"
+            disabled={busy || paths.length === 0 || unfiled.length === 0}
+            onClick={ask}
+          >
+            <SparkIcon size={18} />
+            <span>{busy ? "Asking AI…" : "File with AI"}</span>
+          </button>
+          {!busy && paths.length === 0 && unfiled.length > 0 && <p className="filing-empty">Create a folder before filing.</p>}
+          {!busy && paths.length > 0 && unfiled.length === 0 && <p className="filing-empty">Every note is already in a folder.</p>}
+        </>
+      )}
+    </section>
   );
 }
