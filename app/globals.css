@@ -1391,7 +1391,6 @@ mark.hit {
   }
   @keyframes modal-out {
     to {
-      transform: translateX(-50%) translateY(8px) scale(0.98);
       opacity: 0;
     }
   }
@@ -1428,6 +1427,39 @@ mark.hit {
   opacity: 1;
   color: var(--accent);
   animation: pulse 1.1s ease-in-out infinite;
+}
+
+/* Brief post-dictation cleanup — sits next to the mic, then disappears. */
+.voice-fix {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+  padding: 0 10px 0 8px;
+  margin-inline-end: 2px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: 12.5px;
+  font-weight: 700;
+  flex: none;
+  animation: fab-in 0.28s var(--ease-spring) both;
+}
+.voice-fix svg {
+  color: var(--accent);
+}
+.voice-fix:hover {
+  filter: brightness(0.97);
+}
+.voice-fix.busy {
+  opacity: 0.7;
+  pointer-events: none;
+}
+.voice-fix.busy svg {
+  animation: pulse 1.1s ease-in-out infinite;
+}
+.voice-fix:disabled {
+  opacity: 0.45;
 }
 
 /* Voice dictation: language chip + a pulsing "Listening" pill (tap to stop). */

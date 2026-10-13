@@ -8,6 +8,11 @@ import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 interface DictationState {
   /** Where the next phrase is inserted; follows edits made around it. */
   anchor: number;
+  /**
+   * Start of the first committed phrase this session. -1 until something is
+   * written. Maps with document edits so a later "fix speech" can find it.
+   */
+  spanFrom: number;
   /** Start the first phrase on a new line (dictating into a note you weren't editing). */
   newLine: boolean;
   interim: string;
@@ -16,6 +21,8 @@ interface DictationState {
 const begin = StateEffect.define<{ anchor: number; newLine: boolean }>();
 const interim = StateEffect.define<string>();
 const end = StateEffect.define<null>();
+/** After a phrase lands: keep spanFrom, move the insert anchor. */
+const advance = StateEffect.define<{ spanFrom: number; anchor: number }>();
 
 class InterimWidget extends WidgetType {
   constructor(readonly text: string) {
@@ -39,10 +46,17 @@ const field = StateField.define<DictationState | null>({
   create: () => null,
   update(value, tr) {
     let next = value;
-    if (next && tr.docChanged) next = { ...next, anchor: tr.changes.mapPos(next.anchor, 1) };
+    if (next && tr.docChanged) {
+      next = {
+        ...next,
+        anchor: tr.changes.mapPos(next.anchor, 1),
+        spanFrom: next.spanFrom < 0 ? -1 : tr.changes.mapPos(next.spanFrom, 1),
+      };
+    }
     for (const e of tr.effects) {
-      if (e.is(begin)) next = { anchor: e.value.anchor, newLine: e.value.newLine, interim: "" };
+      if (e.is(begin)) next = { anchor: e.value.anchor, spanFrom: -1, newLine: e.value.newLine, interim: "" };
       else if (e.is(interim) && next) next = { ...next, interim: e.value };
+      else if (e.is(advance) && next) next = { ...next, spanFrom: e.value.spanFrom, anchor: e.value.anchor, newLine: false, interim: "" };
       else if (e.is(end)) next = null;
     }
     return next;
@@ -67,6 +81,19 @@ export function beginDictation(view: EditorView) {
 
 export function endDictation(view: EditorView) {
   if (view.state.field(field, false)) view.dispatch({ effects: end.of(null) });
+}
+
+/**
+ * Range of text committed during the current dictation session, if any.
+ * Call before endDictation — ending clears the session state.
+ */
+export function dictationSpan(view: EditorView): { from: number; to: number } | null {
+  const s = view.state.field(field, false);
+  if (!s || s.spanFrom < 0 || s.anchor <= s.spanFrom) return null;
+  const from = Math.max(0, Math.min(s.spanFrom, view.state.doc.length));
+  const to = Math.max(from, Math.min(s.anchor, view.state.doc.length));
+  if (to <= from) return null;
+  return { from, to };
 }
 
 export function showInterim(view: EditorView, text: string) {
@@ -104,10 +131,10 @@ export function insertPhrase(view: EditorView, phrase: string) {
   if (!s || !clean) return;
   const insert = spaced(view, s, clean, true);
   const pos = s.anchor;
+  const spanFrom = s.spanFrom >= 0 ? s.spanFrom : pos;
   view.dispatch({
     changes: { from: pos, insert },
-    // The anchor field maps with assoc 1, so it lands after the new text.
-    effects: [interim.of(""), begin.of({ anchor: pos + insert.length, newLine: false })],
+    effects: [advance.of({ spanFrom, anchor: pos + insert.length })],
     selection: view.hasFocus ? { anchor: pos + insert.length } : undefined,
     scrollIntoView: view.hasFocus,
     userEvent: "input.dictate",
