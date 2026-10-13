@@ -5,7 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { flushSync } from "react-dom";
 import { baseName, longDate } from "@/lib/derive";
 import { Dictation, canDictate, type DictationLang, type DictationPhase } from "@/lib/dictation";
-import { beginDictation, endDictation, insertPhrase, revealDictation, showInterim } from "@/lib/dictationEditor";
+import { beginDictation, dictationSpan, endDictation, insertPhrase, revealDictation, showInterim } from "@/lib/dictationEditor";
 import { scrollCaretIntoView } from "@/lib/editorKit";
 import { getAuthInstance } from "@/lib/firebase";
 import { setPref, usePrefs } from "@/lib/prefs";
@@ -302,13 +302,42 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
 
   // ── dictation ─────────────────────────────────────────────────────────────
   const [dict, setDict] = useState<{ phase: DictationPhase } | null>(null);
+  /** Brief post-dictation offer to clean up the spoken span with AI. */
+  const [voiceFix, setVoiceFix] = useState<{ from: number; to: number; text: string } | null>(null);
+  const [voiceFixBusy, setVoiceFixBusy] = useState(false);
+  const voiceFixTimer = useRef(0);
+  const dismissVoiceFix = useCallback(() => {
+    window.clearTimeout(voiceFixTimer.current);
+    setVoiceFix(null);
+    setVoiceFixBusy(false);
+  }, []);
+  const offerVoiceFix = useCallback(
+    (span: { from: number; to: number }, text: string) => {
+      window.clearTimeout(voiceFixTimer.current);
+      setVoiceFix({ ...span, text });
+      // Short-lived and easy to ignore — it isn't a modal.
+      voiceFixTimer.current = window.setTimeout(() => dismissVoiceFix(), 8_000);
+    },
+    [dismissVoiceFix],
+  );
+  // Drop the offer once the spoken span is no longer at those positions.
+  useEffect(() => {
+    if (!voiceFix) return;
+    const v = view.current;
+    if (!v || voiceFix.to > v.state.doc.length || voiceFix.from < 0) {
+      dismissVoiceFix();
+      return;
+    }
+    if (v.state.doc.sliceString(voiceFix.from, voiceFix.to) !== voiceFix.text) dismissVoiceFix();
+  }, [body, voiceFix, dismissVoiceFix]);
   const keepDictationInView = () => {
     const v = view.current;
     if (v && !v.hasFocus) revealDictation(v);
   };
   const startDictation = () => {
     const v = view.current;
-    if (!v || aiBusy || dictation.current) return;
+    if (!v || aiBusy || voiceFixBusy || dictation.current) return;
+    dismissVoiceFix();
     if (!canDictate()) {
       // The keyboard's own mic is the same built-in dictation; bring the keyboard up.
       toast("Use the mic on your keyboard to dictate.");
@@ -337,7 +366,11 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
         ended: (result) => {
           if (dictation.current === d) dictation.current = null;
           setDict(null);
-          if (view.current) endDictation(view.current);
+          const ed = view.current;
+          const span = ed ? dictationSpan(ed) : null;
+          const spoken = span && ed ? ed.state.doc.sliceString(span.from, span.to) : "";
+          if (ed) endDictation(ed);
+          if (span && spoken.trim() && !result) offerVoiceFix(span, spoken);
           if (result) {
             toast(result.error);
             if (result.useKeyboard) {
@@ -368,6 +401,7 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
     return () => {
       document.removeEventListener("visibilitychange", onHide);
       dictation.current?.stop();
+      window.clearTimeout(voiceFixTimer.current);
     };
   }, []);
 
@@ -425,6 +459,62 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
       multiline: true,
     });
     if (text) runAi(text);
+  };
+
+  /** Fix grammar/spelling on the last dictated span only; leave the rest of the note alone. */
+  const fixVoiceSpeech = async () => {
+    const v = view.current;
+    const offer = voiceFix;
+    if (!v || !offer || aiBusy || voiceFixBusy) return;
+    const { from, to, text: original } = offer;
+    if (to > v.state.doc.length || from < 0 || to <= from) {
+      dismissVoiceFix();
+      return toast("That dictation isn't there anymore");
+    }
+    const at = v.state.doc.sliceString(from, to);
+    if (at !== original) {
+      dismissVoiceFix();
+      return toast("That dictation isn't there anymore");
+    }
+    const lead = original.match(/^\s*/)?.[0] ?? "";
+    const trail = original.match(/\s*$/)?.[0] ?? "";
+    const core = original.slice(lead.length, original.length - trail.length);
+    if (!core.trim()) {
+      dismissVoiceFix();
+      return;
+    }
+    if (!navigator.onLine) return toast("AI needs a connection");
+    setVoiceFixBusy(true);
+    window.clearTimeout(voiceFixTimer.current);
+    try {
+      const token = await getAuthInstance().currentUser?.getIdToken();
+      const res = await fetch("/api/ai", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ action: "fixSpeech", text: core }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { text?: unknown; error?: string };
+      if (!res.ok || typeof data.text !== "string") throw new Error(data.error || "Couldn't clean up dictation");
+      const fixed = lead + data.text + trail;
+      if (fixed === original) {
+        dismissVoiceFix();
+        toast("Already clear — nothing to change");
+        return;
+      }
+      const before = { title, body: v.state.doc.toString() };
+      v.dispatch({
+        changes: { from, to, insert: fixed },
+        selection: { anchor: from + fixed.length },
+        userEvent: "input.ai",
+      });
+      // NoteBody.onChange saves the new body; clear the chip before that edit dismisses it.
+      setAiUndo(before);
+      dismissVoiceFix();
+      toast("Cleaned up dictation", { label: "Undo", run: () => undoAiRef.current() });
+    } catch (e) {
+      setVoiceFixBusy(false);
+      toast(e instanceof Error ? e.message : "Couldn't clean up dictation");
+    }
   };
 
   const undoAi = () => {
@@ -551,11 +641,24 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
             </>
           ) : (
             <>
+              {voiceFix && (
+                <button
+                  className={`voice-fix${voiceFixBusy ? " busy" : ""}`}
+                  aria-label="Fix grammar and spelling of what you just dictated"
+                  title="Fix grammar & spelling"
+                  disabled={voiceFixBusy || aiBusy}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={fixVoiceSpeech}
+                >
+                  <SparkIcon size={15} />
+                  <span>Fix</span>
+                </button>
+              )}
               <button
                 className="icon-btn"
                 aria-label="Dictate"
                 title="Dictate"
-                disabled={aiBusy}
+                disabled={aiBusy || voiceFixBusy}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={startDictation}
               >
@@ -565,7 +668,7 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
                 className={`icon-btn${aiBusy ? " busy" : ""}`}
                 aria-label={aiBusy ? "AI is editing" : "AI"}
                 title="AI"
-                disabled={aiBusy}
+                disabled={aiBusy || voiceFixBusy}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={(e) => aiMenu(e.currentTarget)}
               >

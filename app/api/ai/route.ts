@@ -27,10 +27,32 @@ export async function POST(req: Request) {
 
   try {
     if (payload.action === "file") return Response.json(await fileNotes(payload));
+    if (payload.action === "fixSpeech") return Response.json(await fixSpeech(payload));
     return Response.json(await editNote(payload));
   } catch (e) {
     return errorResponse(e);
   }
+}
+
+/** Clean up a short speech-to-text span without rewriting the rest of the note. */
+async function fixSpeech(payload: Record<string, unknown>) {
+  const text = typeof payload.text === "string" ? payload.text : "";
+  if (!text.trim()) throw new AiError("Nothing to fix.", 400);
+  if (text.length > 20_000) throw new AiError("That dictation is too long to clean up in one go.", 413);
+
+  const result = await chatJson({
+    what: "Speech cleanup",
+    temperature: 0.1,
+    system: `You clean up speech-to-text. Reply with JSON {"text": string} and nothing else.
+Fix grammar, spelling, and punctuation only. Keep the speaker's meaning, wording, and language.
+Leave Arabic script and Arabic transliterations unchanged character-for-character.
+Do not add commentary, titles, markdown, or quotation marks the speaker did not say.
+Do not translate. If the text is already fine, return it unchanged.`,
+    user: text,
+  });
+  const parsed = result as { text?: unknown };
+  if (typeof parsed.text !== "string") throw new AiError("Speech cleanup returned nothing.");
+  return { text: parsed.text };
 }
 
 async function editNote(payload: Record<string, unknown>) {
