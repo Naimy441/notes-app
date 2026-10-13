@@ -4,6 +4,9 @@ import { flushSync } from "react-dom";
 
 const reduced = () => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+const EASE = "cubic-bezier(0.2, 0.8, 0.2, 1)";
+const MORPH_MS = 380;
+
 export const canVT = () =>
   typeof document !== "undefined" &&
   "startViewTransition" in document &&
@@ -13,9 +16,13 @@ export const canVT = () =>
 /**
  * Card-to-sheet morphs. On a phone the first transition snapshots a half-laid-out
  * fixed sheet and flashes the list behind it, so mobile opens with a plain cover.
+ * Morphs use WAAPI geometry (not view-transition snapshots or non-uniform scale),
+ * so they don't need the View Transition API.
  */
 export const canMorphNote = () =>
-  canVT() && window.matchMedia("(min-width: 700px) and (pointer: fine)").matches;
+  typeof window !== "undefined" &&
+  !reduced() &&
+  window.matchMedia("(min-width: 700px) and (pointer: fine)").matches;
 
 /** Aborted transitions (e.g. tab hidden mid-flight) still apply the update; don't surface them as errors. */
 export function quiet(t: ViewTransition) {
@@ -45,74 +52,132 @@ export function vt(update: () => void, opts: { before?: () => void; during?: () 
   return t;
 }
 
-/**
- * Shrink the open sheet onto its card.
- * A view transition only crossfades the snapshots, and with the body position-fixed
- * for the scroll lock those snapshots don't share a coordinate space, so the group
- * jumps. Animating the sheet's own transform uses the two visual rects directly.
- */
-export function morphSheetToCard(sheet: HTMLElement, card: DOMRect, backdrop: HTMLElement | null): Animation {
-  const from = sheet.getBoundingClientRect();
-  // Desktop lays the sheet out at left:50% with transform:translateX(-50%).
-  // Scaling that box keeps the percentage translate, so the left edge walks
-  // right as the width drops and the sheet misses the card. Park the border
-  // box on the pixels already on screen and animate from a clean transform.
+type Pin = {
+  animation: string;
+  boxSizing: string;
+  left: string;
+  top: string;
+  width: string;
+  height: string;
+  right: string;
+  bottom: string;
+  margin: string;
+  maxHeight: string;
+  transform: string;
+  transformOrigin: string;
+  overflow: string;
+  pointerEvents: string;
+};
+
+/** Park the sheet on pixel geometry so left:50%/translateX(-50%) can't drift mid-morph. */
+function pinSheet(sheet: HTMLElement, box: DOMRect): Pin {
   sheet.classList.add("vt");
   sheet.getAnimations().forEach((anim) => anim.cancel());
   const style = sheet.style;
-  style.animation = "none";
-  style.boxSizing = "border-box";
-  style.left = `${from.left}px`;
-  style.top = `${from.top}px`;
-  style.width = `${from.width}px`;
-  style.height = `${from.height}px`;
-  style.right = "auto";
-  style.bottom = "auto";
-  style.margin = "0";
-  style.maxHeight = "none";
-  style.transform = "none";
-  style.transformOrigin = "0px 0px";
-  style.overflow = "hidden";
-  style.pointerEvents = "none";
-
-  const pinned = sheet.getBoundingClientRect();
-  const sx = card.width / pinned.width;
-  const sy = card.height / pinned.height;
-  const radius = getComputedStyle(sheet).borderTopLeftRadius || "0px";
-  // Keyframes repeat the pin: a re-render can clear the inline styles, and a
-  // stylesheet transform must not composite back in while the width changes.
-  const pin = {
+  const pin: Pin = {
     animation: "none",
     boxSizing: "border-box",
-    left: `${pinned.left}px`,
-    top: `${pinned.top}px`,
-    width: `${pinned.width}px`,
-    height: `${pinned.height}px`,
+    left: `${box.left}px`,
+    top: `${box.top}px`,
+    width: `${box.width}px`,
+    height: `${box.height}px`,
     right: "auto",
     bottom: "auto",
     margin: "0",
     maxHeight: "none",
+    transform: "none",
     transformOrigin: "0px 0px",
     overflow: "hidden",
     pointerEvents: "none",
   };
+  Object.assign(style, pin);
+  return pin;
+}
+
+/**
+ * Drop inline morph pins so stylesheet layout owns the sheet again.
+ * Leaves the `.vt` class in place — removing it would re-trigger modal-in.
+ */
+export function clearSheetPin(sheet: HTMLElement) {
+  const style = sheet.style;
+  for (const prop of [
+    "animation",
+    "box-sizing",
+    "left",
+    "top",
+    "width",
+    "height",
+    "right",
+    "bottom",
+    "margin",
+    "max-height",
+    "transform",
+    "transform-origin",
+    "overflow",
+    "pointer-events",
+    "border-radius",
+  ]) {
+    style.removeProperty(prop);
+  }
+}
+
+/**
+ * Grow the sheet out of its card.
+ * Animates the border box (left/top/width/height) instead of scale(), so the
+ * note content is clipped as the window opens — not stretched or zoomed.
+ */
+export function morphCardToSheet(sheet: HTMLElement, card: DOMRect): Animation {
+  // Measure the laid-out destination before overriding geometry. Desktop uses
+  // left:50% + translateX(-50%); getBoundingClientRect is the visual box.
+  const to = sheet.getBoundingClientRect();
+  const radius = getComputedStyle(sheet).borderTopLeftRadius || "20px";
+  const fromPin = pinSheet(sheet, card);
+  const toPin: Pin = {
+    ...fromPin,
+    left: `${to.left}px`,
+    top: `${to.top}px`,
+    width: `${to.width}px`,
+    height: `${to.height}px`,
+  };
+
+  return sheet.animate(
+    [
+      { ...fromPin, borderRadius: "18px" },
+      { ...toPin, borderRadius: radius },
+    ],
+    { duration: MORPH_MS, easing: EASE, fill: "forwards" },
+  );
+}
+
+/**
+ * Shrink the open sheet onto its card.
+ * Same geometry morph as open: the box travels and clips. Non-uniform scale()
+ * used to squash the sheet into the card's aspect ratio and read as a zoom.
+ */
+export function morphSheetToCard(sheet: HTMLElement, card: DOMRect, backdrop: HTMLElement | null): Animation {
+  const from = sheet.getBoundingClientRect();
+  const radius = getComputedStyle(sheet).borderTopLeftRadius || "0px";
+  const fromPin = pinSheet(sheet, from);
+  const toPin: Pin = {
+    ...fromPin,
+    left: `${card.left}px`,
+    top: `${card.top}px`,
+    width: `${card.width}px`,
+    height: `${card.height}px`,
+  };
 
   backdrop?.animate([{ opacity: 1 }, { opacity: 0, pointerEvents: "none" }], {
     duration: 280,
-    easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
+    easing: EASE,
     fill: "forwards",
   });
 
   return sheet.animate(
     [
-      { ...pin, transform: "none", borderRadius: radius },
-      {
-        ...pin,
-        transform: `translate(${card.left - pinned.left}px, ${card.top - pinned.top}px) scale(${sx}, ${sy})`,
-        borderRadius: "18px",
-      },
+      { ...fromPin, borderRadius: radius },
+      { ...toPin, borderRadius: "18px" },
     ],
-    { duration: 380, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)", fill: "forwards" },
+    { duration: MORPH_MS, easing: EASE, fill: "forwards" },
   );
 }
 

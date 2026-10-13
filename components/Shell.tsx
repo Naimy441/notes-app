@@ -9,7 +9,7 @@ import { setPref, usePrefs } from "@/lib/prefs";
 import { back, navigate, useRoute, type Route } from "@/lib/router";
 import { createFolder, deleteFolder, getState, purgeNotes, renameFolder, updateNote, useStore, type StoreState } from "@/lib/store";
 import type { FolderNode, Note } from "@/lib/types";
-import { canMorphNote, morphSheetToCard, quiet } from "@/lib/vt";
+import { canMorphNote, clearSheetPin, morphCardToSheet, morphSheetToCard } from "@/lib/vt";
 import { Editor } from "./Editor";
 import { FolderCard } from "./FolderCard";
 import { FilingSheet } from "./FilingSheet";
@@ -112,20 +112,24 @@ export function Shell({ user, onSignOut }: Props) {
       navigate({ note: id });
       return;
     }
-    el.style.viewTransitionName = "note-sheet";
-    document.documentElement.classList.add("note-vt");
-    const t = quiet(document.startViewTransition(() => {
-      el.style.viewTransitionName = "";
-      flushSync(() => {
-        setMorph(true);
-        navigate({ note: id });
-      });
-      document.querySelector<HTMLElement>(".editor")?.style.setProperty("view-transition-name", "note-sheet");
-    }));
-    t.finished.finally(() => {
-      document.documentElement.classList.remove("note-vt");
-      document.querySelector<HTMLElement>(".editor")?.style.removeProperty("view-transition-name");
+    // Grow the sheet out of the card's border box. View-transition snapshots
+    // with object-fit:cover scaled the note content and read as a zoom.
+    const card = el.getBoundingClientRect();
+    flushSync(() => {
+      setMorph(true);
+      navigate({ note: id });
     });
+    const sheet = document.querySelector<HTMLElement>(".editor");
+    if (!sheet) {
+      setMorph(false);
+      return;
+    }
+    const anim = morphCardToSheet(sheet, card);
+    // Keep morph/vt true while open so modal-in doesn't replay after the pin clears.
+    anim.finished.then(
+      () => clearSheetPin(sheet),
+      () => clearSheetPin(sheet),
+    );
   }, []);
 
   const closeEditor = useCallback(() => {

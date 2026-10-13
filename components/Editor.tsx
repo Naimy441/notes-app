@@ -87,6 +87,8 @@ function useVisualViewport(ref: React.RefObject<HTMLElement | null>, onInset: ()
     const place = () => {
       const el = ref.current;
       if (!el) return false;
+      // Don't clear top/height while a card↔sheet morph has the sheet pinned.
+      if (el.classList.contains("vt")) return false;
       const mobile = window.innerWidth < 700;
       const open = mobile && window.innerHeight - vv.height > 120;
       if (open) {
@@ -521,7 +523,6 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
       <div
         ref={sheet}
         className={`editor${vtName ? " vt" : ""}${closing ? " closing" : ""}${kb ? " kb" : ""}${aiBusy ? " ai-busy" : ""}`}
-        style={vtName ? { viewTransitionName: "note-sheet" } : undefined}
         role="dialog"
         aria-label={title || "Note"}
       >
