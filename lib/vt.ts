@@ -149,38 +149,6 @@ export function morphCardToSheet(sheet: HTMLElement, card: DOMRect): Animation {
   );
 }
 
-/**
- * Shrink the open sheet onto its card.
- * Same geometry morph as open: the box travels and clips. Non-uniform scale()
- * used to squash the sheet into the card's aspect ratio and read as a zoom.
- */
-export function morphSheetToCard(sheet: HTMLElement, card: DOMRect, backdrop: HTMLElement | null): Animation {
-  const from = sheet.getBoundingClientRect();
-  const radius = getComputedStyle(sheet).borderTopLeftRadius || "0px";
-  const fromPin = pinSheet(sheet, from);
-  const toPin: Pin = {
-    ...fromPin,
-    left: `${card.left}px`,
-    top: `${card.top}px`,
-    width: `${card.width}px`,
-    height: `${card.height}px`,
-  };
-
-  backdrop?.animate([{ opacity: 1 }, { opacity: 0, pointerEvents: "none" }], {
-    duration: 280,
-    easing: EASE,
-    fill: "forwards",
-  });
-
-  return sheet.animate(
-    [
-      { ...fromPin, borderRadius: radius },
-      { ...toPin, borderRadius: "18px" },
-    ],
-    { duration: MORPH_MS, easing: EASE, fill: "forwards" },
-  );
-}
-
 /** Circular reveal from the point the user tapped. */
 export function themeTransition(apply: () => void, x: number, y: number) {
   if (!canVT()) return apply();

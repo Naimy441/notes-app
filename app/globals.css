@@ -1391,7 +1391,6 @@ mark.hit {
   }
   @keyframes modal-out {
     to {
-      transform: translateX(-50%) translateY(8px) scale(0.98);
       opacity: 0;
     }
   }
