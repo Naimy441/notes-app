@@ -9,7 +9,7 @@ import { setPref, usePrefs } from "@/lib/prefs";
 import { back, navigate, useRoute, type Route } from "@/lib/router";
 import { createFolder, deleteFolder, getState, purgeNotes, renameFolder, updateNote, useStore, type StoreState } from "@/lib/store";
 import type { FolderNode, Note } from "@/lib/types";
-import { canMorphNote, morphSheetToCard, quiet } from "@/lib/vt";
+import { canMorphNote, clearSheetPin, morphCardToSheet } from "@/lib/vt";
 import { Editor } from "./Editor";
 import { FolderCard } from "./FolderCard";
 import { FilingSheet } from "./FilingSheet";
@@ -112,88 +112,34 @@ export function Shell({ user, onSignOut }: Props) {
       navigate({ note: id });
       return;
     }
-    el.style.viewTransitionName = "note-sheet";
-    document.documentElement.classList.add("note-vt");
-    const t = quiet(document.startViewTransition(() => {
-      el.style.viewTransitionName = "";
-      flushSync(() => {
-        setMorph(true);
-        navigate({ note: id });
-      });
-      document.querySelector<HTMLElement>(".editor")?.style.setProperty("view-transition-name", "note-sheet");
-    }));
-    t.finished.finally(() => {
-      document.documentElement.classList.remove("note-vt");
-      document.querySelector<HTMLElement>(".editor")?.style.removeProperty("view-transition-name");
+    // Grow the sheet out of the card's border box. View-transition snapshots
+    // with object-fit:cover scaled the note content and read as a zoom.
+    const card = el.getBoundingClientRect();
+    flushSync(() => {
+      setMorph(true);
+      navigate({ note: id });
     });
+    const sheet = document.querySelector<HTMLElement>(".editor");
+    if (!sheet) {
+      setMorph(false);
+      return;
+    }
+    const anim = morphCardToSheet(sheet, card);
+    // Keep morph/vt true while open so modal-in doesn't replay after the pin clears.
+    anim.finished.then(
+      () => clearSheetPin(sheet),
+      () => clearSheetPin(sheet),
+    );
   }, []);
 
   const closeEditor = useCallback(() => {
     flushSync(() => releaseContent());
-    const id = realId.current;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    // Morphing the whole editor chrome back onto the card looked like the UI
+    // itself was shrinking into the note. A short fade is enough.
+    setClosing(true);
     const phone = window.matchMedia("(max-width: 699px)").matches;
-    // A phone sheet is the whole page. Fading it out leaves the list where it
-    // is. Scaling that sheet onto a card, or snapshotting it with a view
-    // transition, moves the page itself.
-    if (phone) {
-      setClosing(true);
-      window.setTimeout(() => back({ note: null }), reduce ? 0 : 170);
-      return;
-    }
-    // The grid repaints the released note after this handler. Read the card
-    // on the following frame so the sheet travels to the card's real rect,
-    // not the held-content one.
-    requestAnimationFrame(() => {
-      const sheet = document.querySelector<HTMLElement>(".editor");
-      const backdrop = document.querySelector<HTMLElement>(".editor-backdrop");
-      const card = id ? document.querySelector<HTMLElement>(`.content [data-note-id="${CSS.escape(id)}"]`) : null;
-      const rectNow = card?.getBoundingClientRect();
-      const onScreen =
-        !!rectNow && rectNow.height > 0 && rectNow.width > 0 && rectNow.bottom > 8 && rectNow.top < innerHeight - 8;
-      // Off-screen cards and reduced motion fade in place. A full-screen
-      // slide reads as a snap, not a return to the card.
-      if (!sheet || !card || !onScreen || reduce) {
-        setClosing(true);
-        window.setTimeout(() => back({ note: null }), reduce ? 0 : 240);
-        return;
-      }
-      // Freeze the locked body height, then drop the note-colored page
-      // background, so the list shows through in its own color while the
-      // sheet scales onto the card. The lock itself stays until unmount.
-      document.body.style.height = `${document.body.getBoundingClientRect().height}px`;
-      document.documentElement.classList.remove("note-open");
-      // The grid's column count is measured from the list width. Dropping the
-      // open-note lock changes that width, and the card then moves. Wait until
-      // its rect stops changing, or the sheet flies to where the card was.
-      let last = card.getBoundingClientRect();
-      let stable = 0;
-      let frames = 0;
-      const tick = () => {
-        const rect = card.getBoundingClientRect();
-        const same =
-          Math.abs(rect.left - last.left) < 0.5 &&
-          Math.abs(rect.top - last.top) < 0.5 &&
-          Math.abs(rect.width - last.width) < 0.5 &&
-          Math.abs(rect.height - last.height) < 0.5;
-        stable = same ? stable + 1 : 0;
-        last = rect;
-        frames += 1;
-        if (stable < 1 && frames < 8) {
-          requestAnimationFrame(tick);
-          return;
-        }
-        const anim = morphSheetToCard(sheet, rect, backdrop);
-        let finished = false;
-        const finish = () => {
-          if (finished) return;
-          finished = true;
-          back({ note: null });
-        };
-        anim.finished.then(finish, finish);
-      };
-      requestAnimationFrame(tick);
-    });
+    window.setTimeout(() => back({ note: null }), reduce ? 0 : phone ? 170 : 200);
   }, []);
 
   // One editor instance per open: a draft turning into a real note ("new" → id) must not remount it.

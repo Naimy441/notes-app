@@ -1391,7 +1391,6 @@ mark.hit {
   }
   @keyframes modal-out {
     to {
-      transform: translateX(-50%) translateY(8px) scale(0.98);
       opacity: 0;
     }
   }
@@ -2108,11 +2107,13 @@ html.note-vt::view-transition-old(root),
 html.note-vt::view-transition-new(root) {
   animation: none;
 }
+/* Prefer fill over cover so leftover note-sheet transitions don't zoom-crop. */
 ::view-transition-old(note-sheet),
 ::view-transition-new(note-sheet) {
   height: 100%;
-  object-fit: cover;
-  object-position: top;
+  width: 100%;
+  object-fit: fill;
+  object-position: top left;
 }
 
 html.theme-vt::view-transition-old(root) {
