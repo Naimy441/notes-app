@@ -7,6 +7,7 @@ import { Compartment, EditorState, Transaction } from "@codemirror/state";
 import { EditorView, keymap, placeholder } from "@codemirror/view";
 import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { bidiHitTest, bidiKeys, bidiLayout, readingRoom, scrollCaretIntoView } from "@/lib/editorKit";
+import { dictationField } from "@/lib/dictationEditor";
 import { livePreview, markdownHighlight } from "@/lib/livePreview";
 
 let applyBodyEditable: (on: boolean) => void = () => {};
@@ -90,6 +91,7 @@ export function NoteBody({ initial, onChange, onWikilink, onModEnter, onReady }:
           markdown({ base: markdownLanguage }),
           syntaxHighlighting(markdownHighlight),
           livePreview({ onWikilink: (t) => cb.current.onWikilink(t) }),
+          dictationField,
           bidiLayout(),
           bidiHitTest(),
           readingRoom(),

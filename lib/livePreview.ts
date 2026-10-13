@@ -72,6 +72,11 @@ class CodeWidget extends WidgetType {
     return other.code === this.code && other.info === this.info;
   }
   toDOM() {
+    // Spacing is padding on a wrapper, never margin: CodeMirror measures a
+    // block widget's border box, so margins would shift every line below it
+    // and taps would land on the wrong line.
+    const wrap = document.createElement("div");
+    wrap.className = "cm-rendered-code-wrap";
     const pre = document.createElement("pre");
     pre.className = "cm-rendered-code";
     if (this.info) {
@@ -83,7 +88,8 @@ class CodeWidget extends WidgetType {
     const code = document.createElement("code");
     code.textContent = this.code;
     pre.append(code);
-    return pre;
+    wrap.append(pre);
+    return wrap;
   }
   ignoreEvent() {
     return false;
@@ -299,12 +305,14 @@ function build(view: EditorView): { decorations: DecorationSet; atomic: Decorati
           }
           case "TaskMarker": {
             const checked = /x/i.test(state.sliceDoc(node.from + 1, node.from + 2));
-            const deco = Decoration.replace({ widget: new CheckboxWidget(checked) }).range(node.from, node.to);
+            // The box replaces "[ ]" and the space after it; the gap comes from CSS margin.
+            const to = state.sliceDoc(node.to, node.to + 1) === " " ? node.to + 1 : node.to;
+            const deco = Decoration.replace({ widget: new CheckboxWidget(checked) }).range(node.from, to);
             out.push(deco);
             atomic.push(deco);
             if (checked) {
               const end = doc.lineAt(node.from).to;
-              if (end > node.to) out.push(Decoration.mark({ class: "cm-task-done" }).range(node.to, end));
+              if (end > to) out.push(Decoration.mark({ class: "cm-task-done" }).range(to, end));
             }
             return;
           }
@@ -431,41 +439,58 @@ const theme = EditorView.theme({
     backgroundColor: "var(--field)",
     padding: "10px 12px",
     borderRadius: "10px",
-    margin: "0.35em 0 0.7em",
+    margin: "0",
     overflowX: "auto",
     whiteSpace: "pre",
   },
+  ".cm-rendered-code-wrap": { padding: "0.35em 0 0.7em" },
   ".cm-rendered-code code": { fontFamily: "inherit", fontSize: "inherit", background: "none", padding: 0 },
   ".cm-code-lang": { display: "block", marginBottom: "6px", color: "var(--muted)", fontFamily: "var(--font)", fontSize: "11px", fontWeight: "650", letterSpacing: "0.04em", textTransform: "uppercase" },
-  ".cm-md-table-wrap": { overflowX: "auto", margin: "0.45em 0 0.75em" },
+  ".cm-md-table-wrap": { overflowX: "auto", padding: "0.45em 0 0.75em" },
   ".cm-md-table": { borderCollapse: "collapse", fontSize: "0.92em", width: "max-content", maxWidth: "100%" },
   ".cm-md-table th, .cm-md-table td": { border: "1px solid var(--border-strong)", padding: "4px 8px", verticalAlign: "top" },
   ".cm-md-table th": { fontWeight: "700" },
   ".cm-hr": { position: "relative" },
   ".cm-hr::after": { content: '""', position: "absolute", insetInline: "0", top: "50%", borderTop: "1px solid var(--border-strong)" },
   ".cm-bullet": { color: "var(--muted)", display: "inline-block", minWidth: "0.9em", fontWeight: "700" },
+  // Checked and unchecked boxes share one baseline: the tick is absolutely
+  // positioned, so it can't shift the box the way inline content does.
   ".cm-task-box": {
-    appearance: "none",
+    position: "relative",
+    display: "inline-block",
+    boxSizing: "border-box",
     width: "1.05em",
     height: "1.05em",
-    margin: "0 0.45em 0 0",
-    verticalAlign: "-0.17em",
+    marginInlineEnd: "0.45em",
+    verticalAlign: "-0.16em",
     borderRadius: "0.28em",
     border: "1.6px solid var(--muted)",
     cursor: "pointer",
-    display: "inline-grid",
-    placeItems: "center",
     transition: "background .15s, border-color .15s",
   },
   ".cm-task-box.on": { backgroundColor: "var(--accent)", borderColor: "var(--accent)" },
   ".cm-task-box.on::after": {
     content: '""',
-    width: "0.3em",
-    height: "0.55em",
+    position: "absolute",
+    left: "50%",
+    top: "45%",
+    width: "0.28em",
+    height: "0.52em",
     border: "solid var(--accent-ink)",
     borderWidth: "0 0.13em 0.13em 0",
-    transform: "rotate(45deg)",
-    marginTop: "-0.1em",
+    transform: "translate(-50%, -50%) rotate(45deg)",
+  },
+  ".cm-dictation-interim": { color: "var(--muted)", fontStyle: "italic" },
+  ".cm-dictation-interim::after": {
+    content: '""',
+    display: "inline-block",
+    width: "0.4em",
+    height: "0.4em",
+    marginInlineStart: "0.3em",
+    borderRadius: "999px",
+    background: "var(--danger)",
+    verticalAlign: "0.1em",
+    animation: "pulse 1s ease-in-out infinite",
   },
   ".cm-task-done": { color: "var(--muted)", textDecoration: "line-through" },
   ".cm-md-link, .cm-wikilink": { color: "var(--link)", textDecoration: "underline", textUnderlineOffset: "2px", cursor: "pointer" },

@@ -12,6 +12,7 @@ import type { FolderNode, Note } from "@/lib/types";
 import { canMorphNote, morphSheetToCard, quiet } from "@/lib/vt";
 import { Editor } from "./Editor";
 import { FolderCard } from "./FolderCard";
+import { FilingSheet } from "./FilingSheet";
 import { FolderPicker } from "./FolderPicker";
 import {
   ArchiveIcon,
@@ -67,6 +68,7 @@ export function Shell({ user, onSignOut }: Props) {
       notes: live.length,
       archive: allNotes.filter((n) => n.archived && !n.deleted).length,
       trash: allNotes.filter((n) => n.deleted).length,
+      unfiled: allNotes.filter((n) => !n.deleted && n.folder === "").length,
     }),
     [allNotes, live],
   );
@@ -253,11 +255,15 @@ export function Shell({ user, onSignOut }: Props) {
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [moving, setMoving] = useState(false);
-  useEffect(() => {
+  // Leaving the view ends a selection.
+  const selectKey = `${route.view}|${route.folder}|${searching}`;
+  const [prevSelectKey, setPrevSelectKey] = useState(selectKey);
+  if (prevSelectKey !== selectKey) {
+    setPrevSelectKey(selectKey);
     setSelecting(false);
     setSelected(new Set());
     setMoving(false);
-  }, [route.view, route.folder, searching]);
+  }
   const selectApi = useMemo<SelectApi>(
     () => ({
       on: selecting,
@@ -310,16 +316,39 @@ export function Shell({ user, onSignOut }: Props) {
       document.removeEventListener("selectionchange", wipe);
     };
   }, [selecting]);
-  const deleteSelected = () => {
+  useEffect(() => {
+    if (!selecting) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !document.querySelector(".dialog, .menu-layer, .sheet")) exitSelect();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selecting]);
+  const plural = (n: number) => `${n} ${n === 1 ? "note" : "notes"}`;
+  const restoreSelected = () => {
+    const ids = [...selected];
+    ids.forEach((id) => updateNote(id, { deleted: false }, { touch: false }));
+    toast(`Restored ${plural(ids.length)}`, { label: "Undo", run: () => ids.forEach((id) => updateNote(id, { deleted: true }, { touch: false })) });
+    exitSelect();
+  };
+  const unarchiveSelected = () => {
+    const ids = [...selected];
+    ids.forEach((id) => updateNote(id, { archived: false }, { touch: false }));
+    toast(`Unarchived ${plural(ids.length)}`, { label: "Undo", run: () => ids.forEach((id) => updateNote(id, { archived: true }, { touch: false })) });
+    exitSelect();
+  };
+  const deleteSelected = async () => {
     const ids = [...selected];
     if (!ids.length) return;
     const chosen = ids.map((id) => getState().notes.get(id)).filter((n): n is Note => !!n);
     if (chosen.length && chosen.every((n) => n.deleted)) {
+      const ok = await confirm({ title: `Delete ${plural(ids.length)} forever?`, message: "This can't be undone.", ok: "Delete", danger: true });
+      if (!ok) return;
       purgeNotes(ids);
-      toast(`Deleted ${ids.length} ${ids.length === 1 ? "note" : "notes"}`);
+      toast(`Deleted ${plural(ids.length)}`);
     } else {
-      ids.forEach((id) => updateNote(id, { deleted: true }));
-      toast(`Moved ${ids.length} ${ids.length === 1 ? "note" : "notes"} to trash`, {
+      ids.forEach((id) => updateNote(id, { deleted: true }, { touch: false }));
+      toast(`Moved ${plural(ids.length)} to trash`, {
         label: "Undo",
         run: () => ids.forEach((id) => updateNote(id, { deleted: false }, { touch: false })),
       });
@@ -330,6 +359,8 @@ export function Shell({ user, onSignOut }: Props) {
   useEffect(() => {
     if (openId && !openId.startsWith("new")) holdContent(getState().notes.get(openId));
   }, [openId]);
+
+  const [filing, setFiling] = useState(false);
 
   // ── chrome ────────────────────────────────────────────────────────────────
   const [drawer, setDrawer] = useState<"open" | "closing" | null>(null);
@@ -508,7 +539,7 @@ export function Shell({ user, onSignOut }: Props) {
     );
   }
 
-  const sidebarProps = { route, tree, hue, counts, notes: allNotes, user, onSignOut };
+  const sidebarProps = { route, tree, hue, counts, user, onSignOut, onFile: () => setFiling(true) };
 
   return (
     <SelectProvider value={selectApi}>
@@ -607,15 +638,31 @@ export function Shell({ user, onSignOut }: Props) {
           >
             Cancel
           </button>
-          <span>
-            {selected.size} selected
-          </span>
-          <button className="btn ghost" disabled={selected.size === 0} onClick={() => setMoving(true)}>
-            Move
-          </button>
-          <button className="btn danger" disabled={selected.size === 0} onClick={deleteSelected}>
-            Delete
-          </button>
+          <span>{selected.size} selected</span>
+          {route.view === "trash" && !searching ? (
+            <>
+              <button className="btn ghost" disabled={selected.size === 0} onClick={restoreSelected}>
+                Restore
+              </button>
+              <button className="btn danger" disabled={selected.size === 0} onClick={deleteSelected}>
+                Delete
+              </button>
+            </>
+          ) : (
+            <>
+              {route.view === "archive" && !searching && (
+                <button className="btn ghost" disabled={selected.size === 0} onClick={unarchiveSelected}>
+                  Unarchive
+                </button>
+              )}
+              <button className="btn ghost" disabled={selected.size === 0} onClick={() => setMoving(true)}>
+                Move
+              </button>
+              <button className="btn danger" disabled={selected.size === 0} onClick={deleteSelected}>
+                Delete
+              </button>
+            </>
+          )}
         </div>
       )}
 
@@ -667,6 +714,8 @@ export function Shell({ user, onSignOut }: Props) {
           }}
         />
       )}
+
+      {filing && <FilingSheet tree={tree} hue={hue} notes={allNotes} onClose={() => setFiling(false)} />}
 
       <OverlayHost />
     </div>

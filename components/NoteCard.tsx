@@ -47,7 +47,6 @@ export const NoteCard = memo(function NoteCard({ note, index, animate, showFolde
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
-    if (e.pointerType === "touch") holdOffNativeSelection();
     if (e.button !== 0 || select?.on) return;
     const t = e.target as HTMLElement;
     if (t.closest("button, a, input")) return;
@@ -57,6 +56,9 @@ export const NoteCard = memo(function NoteCard({ note, index, animate, showFolde
       timer: window.setTimeout(() => {
         suppressClick.current = true;
         press.current = null;
+        // A long-press can start a native text selection that then spreads onto
+        // the selection bar; clear it as selection mode begins.
+        window.getSelection()?.removeAllRanges();
         select?.arm(note.id);
       }, 420),
     };
@@ -76,6 +78,12 @@ export const NoteCard = memo(function NoteCard({ note, index, animate, showFolde
     if (select?.on) {
       e.preventDefault();
       select.toggle(note.id);
+      return;
+    }
+    // ⌘/Ctrl-click starts (or extends) a selection on desktop.
+    if ((e.metaKey || e.ctrlKey) && select) {
+      e.preventDefault();
+      select.arm(note.id);
       return;
     }
     const t = e.target as HTMLElement;
@@ -176,40 +184,6 @@ function Highlighted({ text, terms }: { text: string; terms: string[] }) {
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-/**
- * iOS starts a native selection on long-press. That selection reaches the
- * Cancel label that mounts while the finger is still down, and the callout
- * steals the tap. Block selectstart for the gesture and keep collapsing any
- * range it manages to open.
- */
-function holdOffNativeSelection() {
-  const root = document.documentElement;
-  root.classList.add("suppress-select");
-  const stop = (ev: Event) => ev.preventDefault();
-  const wipe = () => {
-    const sel = window.getSelection();
-    if (sel && !sel.isCollapsed) sel.removeAllRanges();
-  };
-  document.addEventListener("selectstart", stop, true);
-  document.addEventListener("selectionchange", wipe);
-  let ended = false;
-  const end = () => {
-    if (ended) return;
-    ended = true;
-    window.removeEventListener("pointerup", end, true);
-    window.removeEventListener("pointercancel", end, true);
-    document.removeEventListener("selectstart", stop, true);
-    wipe();
-    window.setTimeout(() => {
-      document.removeEventListener("selectionchange", wipe);
-      root.classList.remove("suppress-select");
-      wipe();
-    }, 700);
-  };
-  window.addEventListener("pointerup", end, true);
-  window.addEventListener("pointercancel", end, true);
-}
 
 /** Wrap search hits in <mark> inside already-rendered HTML, text nodes only. */
 export function highlight(root: HTMLElement, terms: string[]) {

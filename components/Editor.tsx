@@ -4,8 +4,11 @@ import type { EditorView } from "@codemirror/view";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { baseName, longDate } from "@/lib/derive";
+import { Dictation, canDictate, type DictationLang, type DictationPhase } from "@/lib/dictation";
+import { beginDictation, endDictation, insertPhrase, revealDictation, showInterim } from "@/lib/dictationEditor";
 import { scrollCaretIntoView } from "@/lib/editorKit";
 import { getAuthInstance } from "@/lib/firebase";
+import { setPref, usePrefs } from "@/lib/prefs";
 import { createNote, discardNote, flushPending, newNoteId, purgeNotes, updateNote, useStore } from "@/lib/store";
 import type { Note } from "@/lib/types";
 import { FolderPicker } from "./FolderPicker";
@@ -16,6 +19,7 @@ import {
   CopyIcon,
   FolderIcon,
   LinkIcon,
+  MicIcon,
   MoreIcon,
   PinFilledIcon,
   PinIcon,
@@ -29,7 +33,7 @@ import {
 import { confirm, linkPrompt, menu, prompt, toast } from "./overlays";
 
 interface Props {
-  /** Existing note id, or "new" / "new:list" for a fresh draft. */
+  /** Existing note id, or "new" for a fresh draft. */
   noteId: string;
   defaultFolder: string;
   folders: string[];
@@ -49,6 +53,25 @@ function markdownLink(text: string, rawUrl: string) {
   if (!text) return `<${url}>`;
   return `[${text.replace(/([[\]\\])/g, "\\$1")}](${url})`;
 }
+
+const BLOCKED_KEY = "dictation-blocked";
+const readFlag = (key: string) => {
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+};
+const writeFlag = (key: string, on: boolean) => {
+  try {
+    if (on) localStorage.setItem(key, "1");
+    else localStorage.removeItem(key);
+  } catch {}
+};
+
+const LANG_LABEL: Record<DictationLang, string> = { auto: "Auto", en: "EN", ar: "ع" };
+const LANG_NEXT: Record<DictationLang, DictationLang> = { auto: "en", en: "ar", ar: "auto" };
+const LANG_NAME: Record<DictationLang, string> = { auto: "Automatic language", en: "English", ar: "Arabic" };
 
 /**
  * Fit the sheet to the keyboard when it opens or closes.
@@ -96,6 +119,7 @@ function useVisualViewport(ref: React.RefObject<HTMLElement | null>, onInset: ()
 
 export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClose, onCreated, onWikilink }: Props) {
   const { notes } = useStore();
+  const prefs = usePrefs();
   const isNew = noteId.startsWith("new");
   const [id] = useState(() => (isNew ? newNoteId() : noteId));
   const note: Note | undefined = notes.get(id);
@@ -112,24 +136,16 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
   const [initialBody] = useState(body);
   const [aiUndo, setAiUndo] = useState<{ title: string; body: string } | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
+
+  // ── keep the caret (or the dictation point) on screen ────────────────────
   const revealCaret = useCallback(() => {
     const active = document.activeElement;
-    // The note body is one contenteditable the size of the whole note. Its box
-    // is not the caret — scrolling that box into view throws the window to the
-    // top, and a paste makes the box even taller. The title is a short field,
-    // so its own rect is the line being edited.
-    if (
-      active instanceof HTMLElement &&
-      active.isContentEditable &&
-      sheet.current?.contains(active) &&
-      !active.classList.contains("cm-content")
-    ) {
+    // The title is a short field, so its own rect is the line being edited.
+    if (active instanceof HTMLElement && active === titleRef.current) {
       const scroller = active.closest(".editor-scroll");
       if (scroller instanceof HTMLElement) {
-        const sel = document.getSelection();
-        const range = sel && sel.rangeCount && active.contains(sel.anchorNode) ? sel.getRangeAt(0).getClientRects() : null;
-        const caret = range && range.length ? range[range.length - 1] : active.getBoundingClientRect();
         const box = scroller.getBoundingClientRect();
+        const caret = active.getBoundingClientRect();
         if (caret.bottom > box.bottom - 28) scroller.scrollTop += caret.bottom - (box.bottom - 28);
         else if (caret.top < box.top + 12) scroller.scrollTop -= box.top + 12 - caret.top;
       }
@@ -146,7 +162,7 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
     return () => el.removeEventListener("focusin", onFocus);
   }, [revealCaret]);
 
-  // Pull in edits from other devices unless the user is typing in that field.
+  // ── edits from other devices ──────────────────────────────────────────────
   const remoteBody = note?.body;
   const remoteTitle = note?.title;
   useEffect(() => {
@@ -164,29 +180,26 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
     if (!el || document.activeElement === el) return;
     if ((el.textContent ?? "") !== title) el.textContent = title;
   }, [title]);
+
+  // ── one editable surface at a time (see NoteBody.tsx) ────────────────────
   const surface = useEditSurface();
   const seeded = useRef(false);
   useLayoutEffect(() => {
     if (seeded.current) return;
     seeded.current = true;
-    // Start with no editable style. A tap arms exactly one surface before focus,
-    // so iOS never sees the title and the body as two assistable fields.
     setEditSurface(isNew ? "title" : "none");
   }, [isNew]);
   useEffect(() => () => setEditSurface("none"), []);
   useEffect(() => {
     if (!isNew || surface !== "title") return;
-    // Focus after the open animation so iOS raises the keyboard reliably.
     titleRef.current?.focus({ preventScroll: true });
   }, [isNew, surface]);
-  // iOS builds the prev/next/done bar from every element with an editable
-  // style, not from ARIA role. Arm the surface under the finger before focus.
   useEffect(() => {
     const root = sheet.current;
     if (!root) return;
     const arm = (e: Event) => {
       const t = e.target;
-      if (!(t instanceof Element)) return;
+      if (!(t instanceof Element) || root.classList.contains("ai-busy")) return;
       if (t.closest(".editor-title")) flushSync(() => setEditSurface("title"));
       else if (t.closest(".note-body")) flushSync(() => setEditSurface("body"));
     };
@@ -198,6 +211,7 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
     };
   }, []);
 
+  // ── saving ────────────────────────────────────────────────────────────────
   const save = useCallback(
     (patch: { title?: string; body?: string }) => {
       if (!created) {
@@ -213,7 +227,9 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
     [created, id, title, body, defaultFolder, onCreated],
   );
 
+  const dictation = useRef<Dictation | null>(null);
   const close = useCallback(() => {
+    dictation.current?.stop();
     flushPending(id);
     const n = notes.get(id);
     if (n && !n.title.trim() && !n.body.trim() && !n.deleted) {
@@ -225,10 +241,10 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !picking && !document.querySelector(".menu-layer, .dialog")) {
-        e.preventDefault();
-        close();
-      }
+      if (e.key !== "Escape" || picking || document.querySelector(".menu-layer, .dialog")) return;
+      e.preventDefault();
+      if (dictation.current) dictation.current.stop();
+      else close();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -237,34 +253,35 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
   /** Put the cursor in the note body at `pos` (default: the end). */
   const focusBody = (pos?: number) => {
     const v = view.current;
-    if (!v) return;
+    if (!v || aiBusy) return;
     flushSync(() => setEditSurface("body"));
     v.focus();
     const at = Math.min(pos ?? v.state.doc.length, v.state.doc.length);
     v.dispatch({ selection: { anchor: at }, scrollIntoView: true });
   };
 
+  const focusBodyRef = useRef(focusBody);
+  useLayoutEffect(() => {
+    focusBodyRef.current = focusBody;
+  });
+
+  // ── links ─────────────────────────────────────────────────────────────────
   const addLink = async () => {
     const v = view.current;
-    if (!v) return;
+    if (!v || aiBusy) return;
     const focused = v.hasFocus;
     const { from, to } = focused ? v.state.selection.main : { from: v.state.doc.length, to: v.state.doc.length };
     const selected = v.state.sliceDoc(from, to);
     const selIsUrl = /^\s*(https?:\/\/|www\.)\S+\s*$/i.test(selected);
     const res = await linkPrompt({ text: selIsUrl ? "" : selected.trim(), url: selIsUrl ? selected.trim() : "" });
     if (!res) {
-      if (focused) {
-        flushSync(() => setEditSurface("body"));
-        v.focus();
-      }
+      if (focused) focusBody(v.state.selection.main.head);
       return;
     }
     let md = markdownLink(res.text, res.url);
-    // Appending to a note that wasn't being edited: start the link on its own line.
     if (!focused && v.state.doc.length && !v.state.doc.toString().endsWith("\n")) md = "\n" + md;
     v.dispatch({ changes: { from, to, insert: md }, selection: { anchor: from + md.length }, scrollIntoView: true });
-    flushSync(() => setEditSurface("body"));
-    v.focus();
+    focusBody(from + md.length);
   };
   const addLinkRef = useRef(addLink);
   useLayoutEffect(() => {
@@ -283,43 +300,115 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
     return () => window.removeEventListener("keydown", onKey);
   }, [picking]);
 
+  // ── dictation ─────────────────────────────────────────────────────────────
+  const [dict, setDict] = useState<{ phase: DictationPhase } | null>(null);
+  const keepDictationInView = () => {
+    const v = view.current;
+    if (v && !v.hasFocus) revealDictation(v);
+  };
+  const startDictation = () => {
+    const v = view.current;
+    if (!v || aiBusy || dictation.current) return;
+    if (!canDictate()) {
+      // The keyboard's own mic is the same built-in dictation; bring the keyboard up.
+      toast("Use the mic on your keyboard to dictate.");
+      focusBody();
+      return;
+    }
+    // If recognition was refused here before (common in iOS home-screen apps),
+    // raise the keyboard now, inside the tap: iOS ignores focus that comes later,
+    // and the keyboard's mic is the fallback. Recognition is still tried.
+    if (readFlag(BLOCKED_KEY)) focusBody();
+    beginDictation(v);
+    const d = new Dictation(
+      {
+        interim: (text) => {
+          if (!view.current) return;
+          showInterim(view.current, text);
+          keepDictationInView();
+        },
+        final: (text) => {
+          if (!view.current) return;
+          writeFlag(BLOCKED_KEY, false);
+          insertPhrase(view.current, text);
+          requestAnimationFrame(keepDictationInView);
+        },
+        phase: (phase) => setDict({ phase }),
+        ended: (result) => {
+          if (dictation.current === d) dictation.current = null;
+          setDict(null);
+          if (view.current) endDictation(view.current);
+          if (result) {
+            toast(result.error);
+            if (result.useKeyboard) {
+              writeFlag(BLOCKED_KEY, true);
+              focusBodyRef.current();
+            }
+          }
+        },
+      },
+      prefs.dictationLang,
+    );
+    dictation.current = d;
+    setDict({ phase: "starting" });
+    // Must run inside the tap: iOS only starts the recognizer and the mic from a user gesture.
+    d.start();
+  };
+  const stopDictation = () => dictation.current?.stop();
+  const cycleLang = () => {
+    const next = LANG_NEXT[prefs.dictationLang];
+    setPref("dictationLang", next);
+    dictation.current?.setLang(next);
+  };
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === "hidden") dictation.current?.stop();
+    };
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      dictation.current?.stop();
+    };
+  }, []);
+
+  // ── AI ────────────────────────────────────────────────────────────────────
   const applyText = (next: { title: string; body: string }) => {
     setTitle(next.title);
     setBody(next.body);
     const v = view.current;
     if (v && v.state.doc.toString() !== next.body) {
-      v.dispatch({
-        changes: { from: 0, to: v.state.doc.length, insert: next.body },
-        selection: { anchor: next.body.length },
-      });
+      // A normal (undoable) transaction, so ⌘Z / Ctrl+Z also reverts an AI edit.
+      v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: next.body }, userEvent: "input.ai" });
     }
     save({ title: next.title, body: next.body });
   };
 
   const runAi = async (instruction: string | null) => {
     if (aiBusy) return;
-    if (!instruction && !title.trim() && !body.trim()) {
-      toast("Nothing to edit");
-      return;
-    }
+    if (!instruction && !title.trim() && !body.trim()) return toast("Nothing to tidy yet");
+    if (!navigator.onLine) return toast("AI needs a connection");
+    dictation.current?.stop();
     const before = { title, body };
+    // Lock the note while the AI works, so nothing typed meanwhile gets overwritten.
+    setEditSurface("none");
+    (document.activeElement as HTMLElement | null)?.blur?.();
     setAiBusy(true);
     try {
       const token = await getAuthInstance().currentUser?.getIdToken();
       const res = await fetch("/api/ai", {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({ title, body, instruction }),
       });
       const data = (await res.json().catch(() => ({}))) as { title?: unknown; body?: unknown; error?: string };
-      if (!res.ok || typeof data.title !== "string" || typeof data.body !== "string") {
-        throw new Error(data.error || "AI edit failed");
+      if (!res.ok || typeof data.title !== "string" || typeof data.body !== "string") throw new Error(data.error || "AI edit failed");
+      if (data.title === before.title && data.body.trimEnd() === before.body.trimEnd()) {
+        toast(instruction ? "The AI made no changes" : "Already tidy — nothing to change");
+        return;
       }
       applyText({ title: data.title, body: data.body });
       setAiUndo(before);
+      toast(instruction ? "AI edit applied" : "Tidied spelling and formatting", { label: "Undo", run: () => undoAiRef.current() });
     } catch (e) {
       toast(e instanceof Error ? e.message : "AI edit failed");
     } finally {
@@ -330,8 +419,8 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
   const promptAi = async () => {
     const text = await prompt({
       title: "Edit with AI",
-      message: "Describe the change. Arabic words written in Latin letters are left as written.",
-      placeholder: "Make this a checklist",
+      message: "Say what to change. Arabic and transliterated words are left as they are.",
+      placeholder: "e.g. Turn this into a checklist",
       ok: "Apply",
       multiline: true,
     });
@@ -344,7 +433,20 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
     setAiUndo(null);
     toast("AI edit undone");
   };
+  const undoAiRef = useRef(undoAi);
+  useLayoutEffect(() => {
+    undoAiRef.current = undoAi;
+  });
 
+  const aiMenu = (anchor: HTMLElement) => {
+    menu(anchor, [
+      { label: "Fix spelling & format", icon: <SparkIcon size={20} />, run: () => runAi(null) },
+      { label: "Edit with a prompt…", icon: <PromptIcon size={20} />, run: promptAi },
+      ...(aiUndo ? [{ label: "Undo AI edit", icon: <UndoIcon size={20} />, run: undoAi }] : []),
+    ]);
+  };
+
+  // ── note actions ──────────────────────────────────────────────────────────
   const n = note;
   const act = (patch: Partial<Note>, msg: string, undo: Partial<Note>) => {
     if (!n) return;
@@ -353,149 +455,151 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
   };
 
   const more = (anchor: HTMLElement) => {
-    const items = [
+    type Item = { label: string; icon: React.ReactNode; danger?: boolean; run: () => void };
+    const items: Item[] = [
+      { label: "Add link", icon: <LinkIcon size={20} />, run: addLink },
+      { label: "Move to folder", icon: <FolderIcon size={20} />, run: () => setPicking(true) },
       {
         label: "Copy text",
         icon: <CopyIcon size={20} />,
         run: () => {
-          navigator.clipboard.writeText([title, body].filter(Boolean).join("\n\n")).then(() => toast("Copied"));
+          navigator.clipboard.writeText([title, body].filter(Boolean).join("\n\n")).then(
+            () => toast("Copied"),
+            () => toast("Couldn't copy"),
+          );
         },
       },
-      { label: "Move to folder", icon: <FolderIcon size={20} />, run: () => setPicking(true) },
     ];
-    if (n?.deleted) {
+    if (n && !n.deleted) {
       items.push(
+        n.archived
+          ? { label: "Unarchive", icon: <UnarchiveIcon size={20} />, run: () => act({ archived: false }, "Note unarchived", { archived: true }) }
+          : {
+              label: "Archive",
+              icon: <ArchiveIcon size={20} />,
+              run: () => {
+                act({ archived: true, pinned: false }, "Note archived", { archived: false, pinned: n.pinned });
+                close();
+              },
+            },
         {
-          label: "Restore",
-          icon: <RestoreIcon size={20} />,
-          run: () => act({ deleted: false }, "Note restored", { deleted: true }),
+          label: "Delete",
+          icon: <TrashIcon size={20} />,
+          danger: true,
+          run: () => {
+            act({ deleted: true }, "Note moved to trash", { deleted: false });
+            close();
+          },
         },
+      );
+    } else if (n?.deleted) {
+      items.push(
+        { label: "Restore", icon: <RestoreIcon size={20} />, run: () => act({ deleted: false }, "Note restored", { deleted: true }) },
         {
           label: "Delete forever",
           icon: <TrashIcon size={20} />,
+          danger: true,
           run: async () => {
             if (await confirm({ title: "Delete forever?", message: "This can't be undone.", ok: "Delete", danger: true })) {
               purgeNotes([id]);
               onClose();
             }
           },
-        } as (typeof items)[number],
-      );
-    } else if (n) {
-      items.push({
-        label: "Delete",
-        icon: <TrashIcon size={20} />,
-        run: () => {
-          act({ deleted: true }, "Note moved to trash", { deleted: false });
-          onClose();
         },
-      });
+      );
     }
-    menu(anchor, items.map((it) => ({ ...it, danger: it.label.startsWith("Delete") })));
+    menu(anchor, items);
   };
+
+  const folder = n?.folder ?? defaultFolder;
+  const listening = !!dict;
+  const phaseLabel = !dict ? "" : dict.phase === "starting" ? "Starting…" : "Listening";
 
   return (
     <>
       <div className={`editor-backdrop${vtName ? " vt" : ""}${closing ? " closing" : ""}`} onClick={close} />
       <div
         ref={sheet}
-        className={`editor${vtName ? " vt" : ""}${closing ? " closing" : ""}${kb ? " kb" : ""}`}
+        className={`editor${vtName ? " vt" : ""}${closing ? " closing" : ""}${kb ? " kb" : ""}${aiBusy ? " ai-busy" : ""}`}
         style={vtName ? { viewTransitionName: "note-sheet" } : undefined}
         role="dialog"
         aria-label={title || "Note"}
       >
         <div className="editor-top">
-          <div className="editor-nav">
-            <button className="icon-btn" aria-label="Back" onClick={close}>
-              <BackIcon />
-            </button>
-            <button className="folder-btn" onClick={() => setPicking(true)}>
-              <FolderIcon size={16} />
-              <span>{(n?.folder ?? defaultFolder) ? baseName(n?.folder ?? defaultFolder) : "No folder"}</span>
-            </button>
-            <div className="spacer" />
-            {n && (
-              <>
+          <button className="icon-btn" aria-label="Back" onClick={close}>
+            <BackIcon />
+          </button>
+          <button className="folder-btn" onClick={() => setPicking(true)} title={folder || "No folder"}>
+            <FolderIcon size={16} />
+            <span>{folder ? baseName(folder) : "No folder"}</span>
+          </button>
+          <div className="spacer" />
+          {listening ? (
+            <>
+              <button className="lang-chip" onClick={cycleLang} onMouseDown={(e) => e.preventDefault()} aria-label={`Dictation language: ${LANG_NAME[prefs.dictationLang]}. Tap to change.`} title={LANG_NAME[prefs.dictationLang]}>
+                {LANG_LABEL[prefs.dictationLang]}
+              </button>
+              <button
+                className={`dictate-pill ${dict.phase}`}
+                onClick={stopDictation}
+                onMouseDown={(e) => e.preventDefault()}
+                aria-label="Stop dictation"
+              >
+                <span className="dictate-dot" aria-hidden="true" />
+                {phaseLabel}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                className="icon-btn"
+                aria-label="Dictate"
+                title="Dictate"
+                disabled={aiBusy}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={startDictation}
+              >
+                <MicIcon />
+              </button>
+              <button
+                className={`icon-btn${aiBusy ? " busy" : ""}`}
+                aria-label={aiBusy ? "AI is editing" : "AI"}
+                title="AI"
+                disabled={aiBusy}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => aiMenu(e.currentTarget)}
+              >
+                <SparkIcon />
+              </button>
+              {n && (
                 <button
                   className={`icon-btn${n.pinned ? " on" : ""}`}
                   aria-label={n.pinned ? "Unpin" : "Pin"}
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={() => updateNote(id, { pinned: !n.pinned }, { touch: false })}
                 >
                   {n.pinned ? <PinFilledIcon /> : <PinIcon />}
                 </button>
-                {!n.deleted && (
-                  <button
-                    className="icon-btn"
-                    aria-label={n.archived ? "Unarchive" : "Archive"}
-                    onClick={() => {
-                      if (n.archived) act({ archived: false }, "Note unarchived", { archived: true });
-                      else {
-                        act({ archived: true, pinned: false }, "Note archived", { archived: false, pinned: n.pinned });
-                        onClose();
-                      }
-                    }}
-                  >
-                    {n.archived ? <UnarchiveIcon /> : <ArchiveIcon />}
-                  </button>
-                )}
-                <button className="icon-btn" aria-label="More" onClick={(e) => more(e.currentTarget)}>
-                  <MoreIcon />
-                </button>
-              </>
-            )}
-          </div>
-          <div className="editor-tools">
-            <button
-              className="icon-btn"
-              aria-label="Add link"
-              title="Add link (Ctrl/⌘ K)"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={addLink}
-            >
-              <LinkIcon />
-            </button>
-            <button
-              className="icon-btn"
-              aria-label="Format and fix spelling"
-              title="Format and fix spelling"
-              disabled={aiBusy}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => runAi(null)}
-            >
-              <SparkIcon />
-            </button>
-            <button
-              className="icon-btn"
-              aria-label="Edit with AI"
-              title="Edit with a prompt"
-              disabled={aiBusy}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={promptAi}
-            >
-              <PromptIcon />
-            </button>
-            <button
-              className="icon-btn"
-              aria-label="Undo AI edit"
-              title="Undo AI edit"
-              disabled={!aiUndo || aiBusy}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={undoAi}
-            >
-              <UndoIcon />
-            </button>
-            <div className="spacer" />
-            <button className="when" onClick={() => setShowCreated((s) => !s)}>
-              {n ? (showCreated ? `Created ${longDate(n.createdAt)}` : `Edited ${longDate(n.updatedAt)}`) : ""}
-            </button>
-          </div>
+              )}
+            </>
+          )}
+          <button className="icon-btn" aria-label="More" onMouseDown={(e) => e.preventDefault()} onClick={(e) => more(e.currentTarget)}>
+            <MoreIcon />
+          </button>
         </div>
 
-        <div className="editor-scroll">
+        <div
+          className="editor-scroll"
+          onClick={(e) => {
+            // Tapping the blank space under the note continues it, like a paper page.
+            const t = e.target as HTMLElement;
+            if (t === e.currentTarget || t.classList.contains("editor-tail")) focusBody();
+          }}
+        >
           <div
             ref={titleRef}
             className="editor-title"
-            contentEditable={surface === "title"}
+            contentEditable={surface === "title" && !aiBusy}
             aria-label="Title"
             data-placeholder="Title"
             dir="auto"
@@ -534,12 +638,25 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
               view.current = v;
             }}
           />
+          <div className="editor-tail">
+            {n && (
+              <button className="editor-meta" onClick={() => setShowCreated((s) => !s)}>
+                {showCreated ? `Created ${longDate(n.createdAt)}` : `Edited ${longDate(n.updatedAt)}`}
+              </button>
+            )}
+          </div>
         </div>
+        {aiBusy && (
+          <div className="ai-working" role="status">
+            <SparkIcon size={16} />
+            AI is editing…
+          </div>
+        )}
       </div>
       {picking && (
         <FolderPicker
           folders={folders}
-          current={n?.folder ?? defaultFolder}
+          current={folder}
           onClose={() => setPicking(false)}
           onPick={(p) => {
             setPicking(false);

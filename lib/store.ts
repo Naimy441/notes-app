@@ -56,9 +56,27 @@ function emit() {
   emitQueued = true;
   queueMicrotask(() => {
     emitQueued = false;
+    if (lazyTimer) {
+      clearTimeout(lazyTimer);
+      lazyTimer = undefined;
+    }
     state = { ...state, version: state.version + 1 };
     listeners.forEach((l) => l());
   });
+}
+
+let lazyTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * For keystrokes: the data is already updated (getState() sees it), but the
+ * re-render of the whole list behind the editor is batched to a few per second.
+ */
+function emitLazily() {
+  if (lazyTimer || emitQueued) return;
+  lazyTimer = setTimeout(() => {
+    lazyTimer = undefined;
+    emit();
+  }, 300);
 }
 
 function subscribe(l: () => void) {
@@ -344,7 +362,8 @@ export function updateNote(id: string, patch: Partial<Note>, opts: { debounce?: 
   if (!n) return;
   const touch = opts.touch ?? true;
   state.notes.set(id, { ...n, ...patch, updatedAt: touch ? Date.now() : n.updatedAt + 1 });
-  emit();
+  if (opts.debounce) emitLazily();
+  else emit();
   scheduleWrite(id, opts.debounce ? 500 : 0);
 }
 

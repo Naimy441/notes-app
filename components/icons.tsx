@@ -134,6 +134,12 @@ export const UndoIcon = make(<path d="M8 8H4.5V4.5M5 13.5a7 7 0 1 0 1.2-5.2L4.5 
 export const LinkIcon = make(
   <path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.3 1.3M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.3-1.3" />,
 );
+export const MicIcon = make(
+  <>
+    <rect x="9" y="3.5" width="6" height="11" rx="3" />
+    <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5" />
+  </>,
+);
 export const RenameIcon = make(<path d="M4 20h4L19 9l-4-4L4 16zM13 20h7" />);
 
 export function GoogleLogo({ size = 20 }: { size?: number }) {

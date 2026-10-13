@@ -1,6 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
+import type { DictationLang } from "./dictation";
 import type { SortKey, ThemePref } from "./types";
 
 interface Prefs {
@@ -8,9 +9,11 @@ interface Prefs {
   sort: SortKey;
   /** Pinned section folded away so the other notes come first. */
   pinnedCollapsed: boolean;
+  /** Language for voice dictation; "auto" follows the device (or auto-detects when recording). */
+  dictationLang: DictationLang;
 }
 
-const DEFAULTS: Prefs = { theme: "system", sort: "updatedAt", pinnedCollapsed: false };
+const DEFAULTS: Prefs = { theme: "system", sort: "updatedAt", pinnedCollapsed: false, dictationLang: "auto" };
 
 function read(): Prefs {
   if (typeof window === "undefined") return DEFAULTS;

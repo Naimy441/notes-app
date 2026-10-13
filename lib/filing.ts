@@ -1,7 +1,8 @@
 /** Shared contract for the sidebar "file with AI" action. */
 
 export const FILING_TITLE_LIMIT = 300;
-export const FILING_BODY_LIMIT = 2_000;
+// A title and the start of the body are plenty to choose a folder, and keep requests small.
+export const FILING_BODY_LIMIT = 600;
 export const FILING_NOTE_LIMIT = 300;
 export const FILING_FOLDER_LIMIT = 500;
 

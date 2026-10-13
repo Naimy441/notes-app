@@ -10,16 +10,16 @@ import {
 import {
   CACHE_SIZE_UNLIMITED,
   connectFirestoreEmulator,
+  getFirestore,
   initializeFirestore,
   persistentLocalCache,
   persistentMultipleTabManager,
   type Firestore,
 } from "firebase/firestore";
 
-export const OWNER_EMAIL = "abdullah.naim.441@gmail.com";
+import { FIREBASE_PROJECT_ID, OWNER_EMAIL, WEB_API_KEY } from "./config";
 
-/** Public Firebase web key (already shipped in the client). Not an OpenAI secret. */
-export const WEB_API_KEY = "AIzaSyAQmcPniVOBtXDi00Q78xmV4t4q6YV2QiE";
+export { OWNER_EMAIL, WEB_API_KEY };
 
 const useEmulators = process.env.NEXT_PUBLIC_USE_EMULATORS === "1";
 
@@ -45,7 +45,7 @@ function getApp() {
       initializeApp({
         apiKey: WEB_API_KEY,
         authDomain: authDomain(),
-        projectId: "note-d7ce7",
+        projectId: FIREBASE_PROJECT_ID,
         storageBucket: "note-d7ce7.firebasestorage.app",
         messagingSenderId: "712151380618",
         appId: "1:712151380618:web:93cb99f9e38223a7833373",
@@ -67,15 +67,20 @@ export function getAuthInstance() {
 
 export function getDb() {
   if (!db) {
-    db = initializeFirestore(getApp(), {
-      ignoreUndefinedProperties: true,
-      localCache: persistentLocalCache({
-        tabManager: persistentMultipleTabManager(),
-        // Never evict: the whole vault lives offline on the device.
-        cacheSizeBytes: CACHE_SIZE_UNLIMITED,
-      }),
-    });
-    if (useEmulators) connectFirestoreEmulator(db, "127.0.0.1", 8080);
+    try {
+      db = initializeFirestore(getApp(), {
+        ignoreUndefinedProperties: true,
+        localCache: persistentLocalCache({
+          tabManager: persistentMultipleTabManager(),
+          // Never evict: the whole vault lives offline on the device.
+          cacheSizeBytes: CACHE_SIZE_UNLIMITED,
+        }),
+      });
+      if (useEmulators) connectFirestoreEmulator(db, "127.0.0.1", 8080);
+    } catch {
+      // Already initialized (a hot reload re-ran this module): reuse that instance.
+      db = getFirestore(getApp());
+    }
   }
   return db;
 }

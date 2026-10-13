@@ -321,7 +321,7 @@ function DialogView({ d, close }: { d: Dialog; close: () => void }) {
 }
 
 /** Bottom sheet on phones, centered card on desktop. */
-export function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function Sheet({ title, onClose, children, wide = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
@@ -329,7 +329,7 @@ export function Sheet({ title, onClose, children }: { title: string; onClose: ()
   }, [onClose]);
   return createPortal(
     <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet" role="dialog" aria-label={title} onClick={(e) => e.stopPropagation()}>
+      <div className={`sheet${wide ? " wide" : ""}`} role="dialog" aria-label={title} onClick={(e) => e.stopPropagation()}>
         <div className="sheet-grip" />
         <div className="sheet-head">{title}</div>
         {children}
