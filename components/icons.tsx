@@ -140,6 +140,15 @@ export const MicIcon = make(
     <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5" />
   </>,
 );
+export const ToTopIcon = make(<path d="M5 4.5h14M12 20V9m-5.5 5.5L12 9l5.5 5.5" />);
+export const PaletteIcon = make(
+  <>
+    <path d="M12 3.5a8.5 8.5 0 1 0 0 17c1 0 1.6-.6 1.6-1.4 0-.4-.2-.8-.4-1.1-.3-.3-.4-.6-.4-1 0-.8.7-1.4 1.5-1.4h1.8a4.4 4.4 0 0 0 4.4-4.4c0-4.3-3.8-7.7-8.5-7.7z" />
+    <circle cx="7.6" cy="11.6" r="1" fill="currentColor" stroke="none" />
+    <circle cx="10.2" cy="7.6" r="1" fill="currentColor" stroke="none" />
+    <circle cx="14.6" cy="7.8" r="1" fill="currentColor" stroke="none" />
+  </>,
+);
 export const RenameIcon = make(<path d="M4 20h4L19 9l-4-4L4 16zM13 20h7" />);
 
 export function GoogleLogo({ size = 20 }: { size?: number }) {

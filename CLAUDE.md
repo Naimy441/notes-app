@@ -7,7 +7,7 @@ The notes live in Firestore (project `note-d7ce7`). To read, edit or reorganize 
 1. `npm run notes:download` — pulls every note into `./notes/` (gitignored), one `.md` file per note, folders as directories.
 2. Edit `./notes/` with normal file operations: rewrite text, rename or move files, create or delete folders and notes.
    - Keep each file's frontmatter `id` — that's how a moved/renamed file stays the same note. A file without an `id` becomes a new note.
-   - Frontmatter `pinned: true` / `archived: true` control pinning and archiving. `created` / `modified` are the note's dates; leave them unless asked.
+   - Frontmatter `pinned: true` / `archived: true` control pinning and archiving; `color: "#e5484d"` gives the note a colored border (quote it: an unquoted `#` starts a YAML comment; remove the line for no color). `created` / `modified` are the note's dates; leave them unless asked.
    - The file name is the note's title (frontmatter `title` overrides it when the title can't be a file name). Untitled notes are named like `Oct 8, 2026, 1.22 AM.md`.
    - Deleting a file sends the note to the app's Trash (recoverable there).
 3. `npm run notes:push -- --dry-run` — review the summary of what will change, and show it to the user.

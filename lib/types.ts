@@ -11,6 +11,8 @@ export interface Note {
   createdAt: number;
   /** ms since epoch; also the last-writer-wins version */
   updatedAt: number;
+  /** Highlight color for the note's border, as "#rrggbb"; null for none. */
+  color?: string | null;
   /** Original file path from the import (used to resolve [[wikilinks]]). */
   path?: string | null;
   /** Extra YAML frontmatter preserved from the import. */

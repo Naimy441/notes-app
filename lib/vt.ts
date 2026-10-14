@@ -10,12 +10,9 @@ export const canVT = () =>
   document.visibilityState === "visible" &&
   !reduced();
 
-/**
- * Card-to-sheet morphs. On a phone the first transition snapshots a half-laid-out
- * fixed sheet and flashes the list behind it, so mobile opens with a plain cover.
- */
+/** Wide layouts float the note over the list, so it can grow out of its card and shrink back into it. */
 export const canMorphNote = () =>
-  canVT() && window.matchMedia("(min-width: 700px) and (pointer: fine)").matches;
+  typeof window !== "undefined" && !reduced() && window.matchMedia("(min-width: 700px)").matches;
 
 /** Aborted transitions (e.g. tab hidden mid-flight) still apply the update; don't surface them as errors. */
 export function quiet(t: ViewTransition) {
@@ -45,75 +42,77 @@ export function vt(update: () => void, opts: { before?: () => void; during?: () 
   return t;
 }
 
+const EASE = "cubic-bezier(0.2, 0.8, 0.2, 1)";
+
 /**
- * Shrink the open sheet onto its card.
- * A view transition only crossfades the snapshots, and with the body position-fixed
- * for the scroll lock those snapshots don't share a coordinate space, so the group
- * jumps. Animating the sheet's own transform uses the two visual rects directly.
+ * An empty sheet-colored surface that travels between a card and the open
+ * note. Only this box is scaled: the note's own text and buttons fade in or
+ * out in place, so nothing in the sheet gets squashed on the way. It sits
+ * under the sheet (z-index between the backdrop and the editor) and animates
+ * only transform and opacity, so it stays smooth while the main thread is busy
+ * mounting or unmounting the editor.
  */
-export function morphSheetToCard(sheet: HTMLElement, card: DOMRect, backdrop: HTMLElement | null): Animation {
-  const from = sheet.getBoundingClientRect();
-  // Desktop lays the sheet out at left:50% with transform:translateX(-50%).
-  // Scaling that box keeps the percentage translate, so the left edge walks
-  // right as the width drops and the sheet misses the card. Park the border
-  // box on the pixels already on screen and animate from a clean transform.
-  sheet.classList.add("vt");
-  sheet.getAnimations().forEach((anim) => anim.cancel());
-  const style = sheet.style;
-  style.animation = "none";
-  style.boxSizing = "border-box";
-  style.left = `${from.left}px`;
-  style.top = `${from.top}px`;
-  style.width = `${from.width}px`;
-  style.height = `${from.height}px`;
-  style.right = "auto";
-  style.bottom = "auto";
-  style.margin = "0";
-  style.maxHeight = "none";
-  style.transform = "none";
-  style.transformOrigin = "0px 0px";
-  style.overflow = "hidden";
-  style.pointerEvents = "none";
+export class MorphSurface {
+  readonly el: HTMLElement;
+  private sheet: DOMRect;
 
-  const pinned = sheet.getBoundingClientRect();
-  const sx = card.width / pinned.width;
-  const sy = card.height / pinned.height;
-  const radius = getComputedStyle(sheet).borderTopLeftRadius || "0px";
-  // Keyframes repeat the pin: a re-render can clear the inline styles, and a
-  // stylesheet transform must not composite back in while the width changes.
-  const pin = {
-    animation: "none",
-    boxSizing: "border-box",
-    left: `${pinned.left}px`,
-    top: `${pinned.top}px`,
-    width: `${pinned.width}px`,
-    height: `${pinned.height}px`,
-    right: "auto",
-    bottom: "auto",
-    margin: "0",
-    maxHeight: "none",
-    transformOrigin: "0px 0px",
-    overflow: "hidden",
-    pointerEvents: "none",
-  };
+  constructor(sheet: DOMRect) {
+    this.sheet = sheet;
+    const el = document.createElement("div");
+    el.className = "morph-surface";
+    el.setAttribute("aria-hidden", "true");
+    Object.assign(el.style, {
+      left: `${sheet.left}px`,
+      top: `${sheet.top}px`,
+      width: `${sheet.width}px`,
+      height: `${sheet.height}px`,
+    });
+    document.body.append(el);
+    this.el = el;
+  }
 
-  backdrop?.animate([{ opacity: 1 }, { opacity: 0, pointerEvents: "none" }], {
-    duration: 280,
-    easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
-    fill: "forwards",
-  });
+  private toCard(card: DOMRect) {
+    const s = this.sheet;
+    return `translate(${card.left - s.left}px, ${card.top - s.top}px) scale(${card.width / s.width}, ${card.height / s.height})`;
+  }
 
-  return sheet.animate(
-    [
-      { ...pin, transform: "none", borderRadius: radius },
-      {
-        ...pin,
-        transform: `translate(${card.left - pinned.left}px, ${card.top - pinned.top}px) scale(${sx}, ${sy})`,
-        borderRadius: "18px",
-      },
-    ],
-    { duration: 380, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)", fill: "forwards" },
-  );
+  /** Grow from the card to the sheet. */
+  open(card: DOMRect, duration = 300) {
+    return this.run([{ transform: this.toCard(card), opacity: 0.6 }, { transform: "none", opacity: 1, offset: 0.35 }, { transform: "none", opacity: 1 }], duration, EASE);
+  }
+
+  /**
+   * Shrink from the sheet onto the card, fading out as it lands. Eases in, so
+   * it stays put for the moment the note's text takes to fade off it.
+   */
+  close(card: DOMRect, duration = 340) {
+    return this.run(
+      [
+        { transform: "none", opacity: 1 },
+        { transform: this.toCard(card), opacity: 1, offset: 0.75 },
+        { transform: this.toCard(card), opacity: 0 },
+      ],
+      duration,
+      "cubic-bezier(0.4, 0, 0.2, 1)",
+    );
+  }
+
+  /** No card to go to: just fade away where the sheet was. */
+  fade(duration = 200) {
+    return this.run([{ opacity: 1 }, { opacity: 0 }], duration, "ease");
+  }
+
+  private run(frames: Keyframe[], duration: number, easing: string): Promise<void> {
+    const anim = this.el.animate(frames, { duration, easing, fill: "forwards" });
+    return anim.finished.then(
+      () => {},
+      () => {},
+    );
+  }
+
+  remove() {
+    this.el.remove();
+  }
 }
 
 /** Circular reveal from the point the user tapped. */

@@ -9,8 +9,9 @@ import { setPref, usePrefs } from "@/lib/prefs";
 import { back, navigate, useRoute, type Route } from "@/lib/router";
 import { createFolder, deleteFolder, getState, purgeNotes, renameFolder, updateNote, useStore, type StoreState } from "@/lib/store";
 import type { FolderNode, Note } from "@/lib/types";
-import { canMorphNote, morphSheetToCard, quiet } from "@/lib/vt";
+import { MorphSurface, canMorphNote } from "@/lib/vt";
 import { Editor } from "./Editor";
+import { prewarmEditor } from "./NoteBody";
 import { FolderCard } from "./FolderCard";
 import { FilingSheet } from "./FilingSheet";
 import { FolderPicker } from "./FolderPicker";
@@ -73,9 +74,18 @@ export function Shell({ user, onSignOut }: Props) {
     [allNotes, live],
   );
 
-  // ── editor open/close with a card → sheet morph ───────────────────────────
-  const [morph, setMorph] = useState(false);
+  // ── editor open/close ─────────────────────────────────────────────────────
+  // Wide screens: an empty surface grows out of the card and the note fades in
+  // on it; closing reverses that. Phones: the note slides up over the list and
+  // fades out on close.
+  const [fromCard, setFromCard] = useState(false);
   const [closing, setClosing] = useState(false);
+  // The list behind the note is made inert (and the page painted note-colored)
+  // only once the note has finished opening. Both restyle the whole list, and
+  // doing that in the same frame as the open is what made opening stutter.
+  const [covered, setCovered] = useState(false);
+  const coverTimer = useRef(0);
+  const closingNow = useRef(false);
   const openId = route.note;
   const realId = useRef<string | null>(null);
   useEffect(() => {
@@ -85,21 +95,30 @@ export function Shell({ user, onSignOut }: Props) {
   useLayoutEffect(() => {
     if (!openId) {
       releaseContent();
-      document.documentElement.classList.remove("note-open");
-      document.documentElement.style.removeProperty("--lock-y");
       return;
     }
     const y = window.scrollY;
-    document.documentElement.classList.add("note-open");
-    document.documentElement.style.setProperty("--lock-y", `${y}px`);
-    document.body.classList.add("locked");
-    document.body.style.top = `-${y}px`;
+    const body = document.body;
+    // Freeze the page where it is. The height reaches the bottom of the screen
+    // and through the home-indicator inset, so the page under a short sheet is
+    // never the bare canvas. Only the body's own style changes here; anything
+    // set on <html> restyles every element on the page.
+    body.classList.add("locked");
+    body.style.top = `-${y}px`;
+    body.style.height = `calc(100lvh + ${y}px + env(safe-area-inset-bottom, 0px))`;
+    body.style.minHeight = `calc(100dvh + ${y}px + env(safe-area-inset-bottom, 0px))`;
+    closingNow.current = false;
+    coverTimer.current = window.setTimeout(() => {
+      document.documentElement.classList.add("note-open");
+      setCovered(true);
+    }, 380);
     return () => {
-      document.body.classList.remove("locked");
-      document.body.style.top = "";
-      document.body.style.height = "";
+      window.clearTimeout(coverTimer.current);
+      body.classList.remove("locked");
+      body.style.top = "";
+      body.style.height = "";
+      body.style.minHeight = "";
       document.documentElement.classList.remove("note-open");
-      document.documentElement.style.removeProperty("--lock-y");
       window.scrollTo(0, y);
     };
   }, [openId]);
@@ -108,92 +127,56 @@ export function Shell({ user, onSignOut }: Props) {
     const note = getState().notes.get(id);
     freeze(note);
     holdContent(note);
-    if (!el || !canMorphNote()) {
+    const card = el && canMorphNote() ? el.getBoundingClientRect() : null;
+    if (!card || card.width === 0) {
       navigate({ note: id });
       return;
     }
-    el.style.viewTransitionName = "note-sheet";
-    document.documentElement.classList.add("note-vt");
-    const t = quiet(document.startViewTransition(() => {
-      el.style.viewTransitionName = "";
-      flushSync(() => {
-        setMorph(true);
-        navigate({ note: id });
-      });
-      document.querySelector<HTMLElement>(".editor")?.style.setProperty("view-transition-name", "note-sheet");
-    }));
-    t.finished.finally(() => {
-      document.documentElement.classList.remove("note-vt");
-      document.querySelector<HTMLElement>(".editor")?.style.removeProperty("view-transition-name");
+    flushSync(() => {
+      setFromCard(true);
+      navigate({ note: id });
     });
+    const sheet = document.querySelector<HTMLElement>(".editor");
+    if (!sheet) return;
+    const surface = new MorphSurface(sheet.getBoundingClientRect());
+    surface.open(card).then(() => surface.remove());
   }, []);
 
   const closeEditor = useCallback(() => {
-    flushSync(() => releaseContent());
+    if (closingNow.current) return;
+    closingNow.current = true;
+    window.clearTimeout(coverTimer.current);
     const id = realId.current;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const phone = window.matchMedia("(max-width: 699px)").matches;
-    // A phone sheet is the whole page. Fading it out leaves the list where it
-    // is. Scaling that sheet onto a card, or snapshotting it with a view
-    // transition, moves the page itself.
-    if (phone) {
-      setClosing(true);
-      window.setTimeout(() => back({ note: null }), reduce ? 0 : 170);
-      return;
-    }
-    // The grid repaints the released note after this handler. Read the card
-    // on the following frame so the sheet travels to the card's real rect,
-    // not the held-content one.
-    requestAnimationFrame(() => {
-      const sheet = document.querySelector<HTMLElement>(".editor");
-      const backdrop = document.querySelector<HTMLElement>(".editor-backdrop");
-      const card = id ? document.querySelector<HTMLElement>(`.content [data-note-id="${CSS.escape(id)}"]`) : null;
-      const rectNow = card?.getBoundingClientRect();
-      const onScreen =
-        !!rectNow && rectNow.height > 0 && rectNow.width > 0 && rectNow.bottom > 8 && rectNow.top < innerHeight - 8;
-      // Off-screen cards and reduced motion fade in place. A full-screen
-      // slide reads as a snap, not a return to the card.
-      if (!sheet || !card || !onScreen || reduce) {
-        setClosing(true);
-        window.setTimeout(() => back({ note: null }), reduce ? 0 : 240);
-        return;
-      }
-      // Freeze the locked body height, then drop the note-colored page
-      // background, so the list shows through in its own color while the
-      // sheet scales onto the card. The lock itself stays until unmount.
-      document.body.style.height = `${document.body.getBoundingClientRect().height}px`;
-      document.documentElement.classList.remove("note-open");
-      // The grid's column count is measured from the list width. Dropping the
-      // open-note lock changes that width, and the card then moves. Wait until
-      // its rect stops changing, or the sheet flies to where the card was.
-      let last = card.getBoundingClientRect();
-      let stable = 0;
-      let frames = 0;
-      const tick = () => {
-        const rect = card.getBoundingClientRect();
-        const same =
-          Math.abs(rect.left - last.left) < 0.5 &&
-          Math.abs(rect.top - last.top) < 0.5 &&
-          Math.abs(rect.width - last.width) < 0.5 &&
-          Math.abs(rect.height - last.height) < 0.5;
-        stable = same ? stable + 1 : 0;
-        last = rect;
-        frames += 1;
-        if (stable < 1 && frames < 8) {
-          requestAnimationFrame(tick);
-          return;
-        }
-        const anim = morphSheetToCard(sheet, rect, backdrop);
-        let finished = false;
-        const finish = () => {
-          if (finished) return;
-          finished = true;
-          back({ note: null });
-        };
-        anim.finished.then(finish, finish);
-      };
-      requestAnimationFrame(tick);
-    });
+    const sheet = document.querySelector<HTMLElement>(".editor");
+    // On a wide screen, a plain surface takes the sheet's place under it while
+    // the note's content fades out, then shrinks onto the card.
+    const surface = sheet && canMorphNote() ? new MorphSurface(sheet.getBoundingClientRect()) : null;
+    flushSync(() => setClosing(true));
+    const finish = () => {
+      back({ note: null }).then(() => surface?.remove());
+    };
+    if (!surface) window.setTimeout(finish, reduce ? 0 : 160);
+    // Two frames on, the fade is running on the compositor. Only then wake the
+    // list (inert off, page color back, the edited note's real text): each of
+    // those restyles the whole list, and doing it first would hold back the
+    // fade's first frame.
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        document.documentElement.classList.remove("note-open");
+        setCovered(false);
+        releaseContent();
+        if (!surface) return;
+        // The list renders the released note on this frame; read its card on the
+        // next one so the surface lands on the card's final size.
+        requestAnimationFrame(() => {
+          const card = id ? document.querySelector<HTMLElement>(`.content [data-note-id="${CSS.escape(id)}"]`) : null;
+          const rect = card?.getBoundingClientRect();
+          const onScreen = !!rect && rect.width > 0 && rect.height > 0 && rect.bottom > 8 && rect.top < innerHeight - 8;
+          (onScreen ? surface.close(rect) : surface.fade()).then(finish);
+        });
+      }),
+    );
   }, []);
 
   // One editor instance per open: a draft turning into a real note ("new" → id) must not remount it.
@@ -205,7 +188,8 @@ export function Shell({ user, onSignOut }: Props) {
     if (openId && openId !== createdId) setEditorKey(openId);
     if (!openId) {
       setClosing(false);
-      setMorph(false);
+      setFromCard(false);
+      setCovered(false);
     }
   }
 
@@ -216,18 +200,17 @@ export function Shell({ user, onSignOut }: Props) {
     navigate({ note: id }, { replace: true });
   }, []);
 
-  const openWikilink = useCallback(
-    (target: string) => {
-      const t = target.trim().toLowerCase();
-      const name = t.split("/").pop()!.replace(/\.md$/, "");
-      const hit =
-        allNotes.find((n) => !n.deleted && n.path?.toLowerCase().replace(/\.md$/, "").endsWith(t)) ??
-        allNotes.find((n) => !n.deleted && n.title.toLowerCase() === name);
-      if (hit) navigate({ note: hit.id });
-      else toast(`No note named “${target}”`);
-    },
-    [allNotes],
-  );
+  // Stable, so holding or releasing a note's content doesn't re-render every card.
+  const openWikilink = useCallback((target: string) => {
+    const notes = [...getState().notes.values()];
+    const t = target.trim().toLowerCase();
+    const name = t.split("/").pop()!.replace(/\.md$/, "");
+    const hit =
+      notes.find((n) => !n.deleted && n.path?.toLowerCase().replace(/\.md$/, "").endsWith(t)) ??
+      notes.find((n) => !n.deleted && n.title.toLowerCase() === name);
+    if (hit) navigate({ note: hit.id });
+    else toast(`No note named “${target}”`);
+  }, []);
 
   // ── search ────────────────────────────────────────────────────────────────
   const searching = route.q !== null;
@@ -471,6 +454,14 @@ export function Shell({ user, onSignOut }: Props) {
   // ── content ───────────────────────────────────────────────────────────────
   const gridProps = { dateKey: sort, onOpen: openNote, onWikilink: openWikilink };
   const loading = !store.cacheLoaded || (store.notes.size === 0 && !store.serverSynced && !store.error);
+  // Once the list is up, warm the editor in idle time so the first note opens as fast as the rest.
+  const warmed = useRef(false);
+  useEffect(() => {
+    if (loading || warmed.current) return;
+    warmed.current = true;
+    const idle = window.requestIdleCallback ?? ((fn: () => void) => window.setTimeout(fn, 1200));
+    idle(() => prewarmEditor(), { timeout: 4000 });
+  }, [loading]);
 
   let content: React.ReactNode;
   if (loading) {
@@ -604,7 +595,7 @@ export function Shell({ user, onSignOut }: Props) {
         <aside className="sidebar-desktop">
           <Sidebar {...sidebarProps} />
         </aside>
-        <main className="content" inert={openId ? true : undefined}>
+        <main className="content" inert={covered ? true : undefined}>
           {store.error && !store.serverSynced && (
             <div className="chip" style={{ margin: "8px 0", whiteSpace: "normal", color: "var(--danger)" }}>
               Sync error: {store.error}
@@ -687,7 +678,7 @@ export function Shell({ user, onSignOut }: Props) {
           noteId={openId}
           defaultFolder={defaultFolder}
           folders={folderPaths}
-          vtName={morph}
+          fromCard={fromCard}
           closing={closing}
           onClose={closeEditor}
           onCreated={onCreated}

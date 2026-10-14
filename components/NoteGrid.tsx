@@ -6,6 +6,8 @@ import { NoteCard, PREVIEW_CHARS } from "./NoteCard";
 
 const MIN_CARD = 210;
 const PAGE = 48;
+/** The first render only needs to fill a screen or two; the rest follows in the next frames. */
+const FIRST_PAGE = 24;
 
 function useColumns(ref: React.RefObject<HTMLElement | null>) {
   const [size, setSize] = useState({ cols: 2, colPx: 170, gap: 10 });
@@ -86,12 +88,12 @@ export function NoteGrid({ notes, resetKey, showFolder = false, dateKey, terms, 
   const ref = useRef<HTMLDivElement>(null);
   const sentinel = useRef<HTMLDivElement>(null);
   const { cols, colPx, gap } = useColumns(ref);
-  const [limit, setLimit] = useState(PAGE);
+  const [limit, setLimit] = useState(FIRST_PAGE);
   const [animKey, setAnimKey] = useState(resetKey);
   const [prevKey, setPrevKey] = useState(resetKey);
   if (prevKey !== resetKey) {
     setPrevKey(resetKey);
-    setLimit(PAGE);
+    setLimit(FIRST_PAGE);
     setAnimKey(resetKey);
   }
   // Only the first screenful animates in; later pages appear instantly.
@@ -132,6 +134,7 @@ export function NoteGrid({ notes, resetKey, showFolder = false, dateKey, terms, 
                 key={note.id}
                 note={note}
                 index={i}
+                estimatedHeight={Math.round(estimate(note, colPx))}
                 animate={animating && i < 24}
                 showFolder={showFolder}
                 dateKey={dateKey}

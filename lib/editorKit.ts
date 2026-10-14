@@ -72,31 +72,60 @@ function rowEndX(el: HTMLElement, y: number): number | null {
  * A tap in the blank area past the end of an LTR line belongs at the end of
  * that line. Stock hit-testing maps that spot to offset 0 once the document
  * has an RTL base direction, while typed text still lands at the end.
+ * Returns that line end, or null when (x, y) is not past an LTR line's text.
  */
-function placeAtLtrTail(event: MouseEvent, view: EditorView): boolean {
-  if (event.button !== 0 || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return false;
-  const found = lineElementAt(view, event.clientX, event.clientY);
-  if (!found) return false;
+function ltrTailAt(view: EditorView, x: number, y: number): number | null {
+  const found = lineElementAt(view, x, y);
+  if (!found) return null;
   const line = view.state.doc.lineAt(found.from);
-  if (!line.text.length || lineDir(line.text) !== "ltr") return false;
-  const edge = rowEndX(found.el, event.clientY);
-  if (edge == null || event.clientX <= edge + 3) return false;
+  if (!line.text.length || lineDir(line.text) !== "ltr") return null;
+  const edge = rowEndX(found.el, y);
+  if (edge == null || x <= edge + 3) return null;
   const box = found.el.getBoundingClientRect();
-  if (event.clientY < box.top || event.clientY > box.bottom) return false;
-  event.preventDefault();
-  view.dispatch({
-    selection: EditorSelection.cursor(line.to, -1),
-    userEvent: "select.pointer",
-    scrollIntoView: true,
-  });
-  view.focus();
-  return true;
+  if (y < box.top || y > box.bottom) return null;
+  return line.to;
 }
 
+const plainPress = (e: MouseEvent) => e.button === 0 && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && e.detail <= 1;
+
+let lastTouch = 0;
+
 export function bidiHitTest(): Extension {
-  return EditorView.domEventHandlers({
-    mousedown: placeAtLtrTail,
-  });
+  return [
+    EditorView.domEventHandlers({
+      touchstart() {
+        lastTouch = Date.now();
+        return false;
+      },
+      // A tap: CodeMirror leaves touch selection to the browser, so place the caret here.
+      mousedown(event, view) {
+        if (Date.now() - lastTouch > 2000 || !plainPress(event)) return false;
+        const at = ltrTailAt(view, event.clientX, event.clientY);
+        if (at == null) return false;
+        event.preventDefault();
+        view.dispatch({ selection: EditorSelection.cursor(at, -1), userEvent: "select.pointer", scrollIntoView: true });
+        view.focus();
+        return true;
+      },
+    }),
+    // A mouse press: anchor at the line end but keep CodeMirror's drag, so a
+    // selection can still start in the blank space after a line.
+    EditorView.mouseSelectionStyle.of((view, event) => {
+      if (!plainPress(event)) return null;
+      let anchor = ltrTailAt(view, event.clientX, event.clientY);
+      if (anchor == null) return null;
+      return {
+        get(cur) {
+          const head = ltrTailAt(view, cur.clientX, cur.clientY) ?? view.posAtCoords({ x: cur.clientX, y: cur.clientY }, false);
+          return head === anchor ? EditorSelection.create([EditorSelection.cursor(anchor, -1)]) : EditorSelection.single(anchor!, head);
+        },
+        update(u) {
+          if (u.docChanged) anchor = u.changes.mapPos(anchor!);
+          return false;
+        },
+      };
+    }),
+  ];
 }
 
 /**

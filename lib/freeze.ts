@@ -20,6 +20,15 @@ export function freeze(note: Note | undefined) {
   notify();
 }
 
+/** Let one note sort by its real dates again (e.g. after "Move to top"). */
+export function unfreeze(id: string) {
+  if (!frozen.has(id)) return;
+  const next = new Map(frozen);
+  next.delete(id);
+  frozen = next;
+  notify();
+}
+
 export function clearFrozen() {
   if (!frozen.size) return;
   frozen = new Map();

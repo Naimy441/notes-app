@@ -66,7 +66,9 @@ for (const n of c.edited) {
   if ((base.folder ?? "") !== n.folder || (base.title ?? "") !== n.title) lines.moved.push(`${base.folder || "(no folder)"}/${base.title || "untitled"} → ${rel}`);
   const bodyChanged = textChanged({ body: n.body }, { body: base.body });
   const flagsChanged = !!base.pinned !== n.pinned || !!base.archived !== n.archived;
-  if (bodyChanged || flagsChanged) lines.edited.push(`${rel}${flagsChanged ? ` (${n.pinned ? "pinned" : "unpinned"}${n.archived ? ", archived" : ""})` : ""}`);
+  const colorChanged = (base.color ?? null) !== n.color;
+  const notes = [flagsChanged && `${n.pinned ? "pinned" : "unpinned"}${n.archived ? ", archived" : ""}`, colorChanged && `color ${n.color ?? "removed"}`].filter(Boolean);
+  if (bodyChanged || notes.length) lines.edited.push(`${rel}${notes.length ? ` (${notes.join("; ")})` : ""}`);
 }
 
 for (const n of c.created) {

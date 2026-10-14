@@ -5,10 +5,13 @@ import { useEffect, useState } from "react";
 import { signIn, signOut, useAuth, wasSignedIn } from "@/lib/auth";
 import { getDb } from "@/lib/firebase";
 import { applyTheme, usePrefs } from "@/lib/prefs";
-import { loadCache, startSync, stopSync } from "@/lib/store";
+import { forgetSnapshot, loadCache, preloadSnapshot, startSync, stopSync } from "@/lib/store";
 import { BrandGlyph, GoogleLogo } from "./icons";
 import { Shell } from "./Shell";
 import { Splash } from "./Splash";
+
+// Begin reading the saved note list while React is still starting up.
+if (typeof window !== "undefined" && wasSignedIn()) preloadSnapshot();
 
 export default function App() {
   const auth = useAuth();
@@ -51,6 +54,7 @@ export default function App() {
   const handleSignOut = async () => {
     stopSync();
     await signOut();
+    await forgetSnapshot().catch(() => {});
     try {
       const db = getDb();
       await terminate(db);

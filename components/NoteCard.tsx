@@ -14,6 +14,8 @@ export const PREVIEW_CHARS = 1200;
 interface Props {
   note: Note;
   index: number;
+  /** Height to reserve while the card is off screen and not laid out yet (see .masonry .card). */
+  estimatedHeight?: number;
   animate: boolean;
   showFolder: boolean;
   dateKey: SortKey;
@@ -22,7 +24,7 @@ interface Props {
   onWikilink: (target: string) => void;
 }
 
-export const NoteCard = memo(function NoteCard({ note, index, animate, showFolder, dateKey, terms, onOpen, onWikilink }: Props) {
+export const NoteCard = memo(function NoteCard({ note, index, estimatedHeight, animate, showFolder, dateKey, terms, onOpen, onWikilink }: Props) {
   const ref = useRef<HTMLElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const select = useSelect();
@@ -111,8 +113,14 @@ export const NoteCard = memo(function NoteCard({ note, index, animate, showFolde
     <article
       ref={ref}
       data-note-id={note.id}
-      className={`card${animate ? " enter" : ""}${select?.on ? " selecting" : ""}${select?.ids.has(note.id) ? " selected" : ""}`}
-      style={animate ? ({ "--i": index } as React.CSSProperties) : undefined}
+      className={`card${animate ? " enter" : ""}${note.color ? " has-color" : ""}${select?.on ? " selecting" : ""}${select?.ids.has(note.id) ? " selected" : ""}`}
+      style={
+        {
+          "--i": animate ? index : undefined,
+          "--note-color": note.color ?? undefined,
+          containIntrinsicBlockSize: estimatedHeight ? `auto ${estimatedHeight}px` : undefined,
+        } as React.CSSProperties
+      }
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={clearPress}
@@ -163,14 +171,18 @@ export const NoteCard = memo(function NoteCard({ note, index, animate, showFolde
 });
 
 // One shared observer for every card's folder name: fade it only when it doesn't fit.
+// The observer reports each name once it's laid out (and again on resize). All
+// widths are read before any class changes, so a page of cards costs one layout,
+// not one per card.
 let overflowObserver: ResizeObserver | null = null;
-const checkOverflow = (el: Element) => el.classList.toggle("fade", el.scrollWidth > el.clientWidth + 1);
 
 function fadeWhenOverflowing(el: HTMLSpanElement | null) {
   if (!el || typeof ResizeObserver === "undefined") return;
-  overflowObserver ??= new ResizeObserver((entries) => entries.forEach((e) => checkOverflow(e.target)));
+  overflowObserver ??= new ResizeObserver((entries) => {
+    const over = entries.map((e) => e.target.scrollWidth > e.target.clientWidth + 1);
+    entries.forEach((e, i) => e.target.classList.toggle("fade", over[i]));
+  });
   overflowObserver.observe(el);
-  checkOverflow(el);
   return () => overflowObserver?.unobserve(el);
 }
 

@@ -47,7 +47,12 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 /** Untitled notes are named after their creation time, like Google Keep's export. */
 const UNTITLED_RE = new RegExp(`^(${MONTHS.join("|")}) \\d{1,2}, \\d{4}, \\d{1,2}\\.\\d{2} [AP]M( \\d+)?$`);
 /** Frontmatter keys this app owns; everything else is preserved as-is in `fm`. */
-const OWN_KEYS = ["id", "title", "pinned", "archived", "created", "modified", "tags", "tag"];
+const OWN_KEYS = ["id", "title", "pinned", "archived", "color", "created", "modified", "tags", "tag"];
+/** "#rrggbb" (or "rrggbb", since an unquoted "#…" in YAML is a comment) → "#rrggbb"; anything else → null. */
+const hexColor = (v) => {
+  const m = /^#?([0-9a-f]{6})$/i.exec(typeof v === "string" ? v.trim() : "");
+  return m ? `#${m[1].toLowerCase()}` : null;
+};
 
 function dateName(ms) {
   const d = new Date(ms);
@@ -86,6 +91,7 @@ export function serializeNote(note, { titleInFm }) {
   if (titleInFm) head.title = note.title;
   if (note.pinned) head.pinned = true;
   if (note.archived) head.archived = true;
+  if (note.color) head.color = note.color;
   if (note.createdAt) head.created = new Date(note.createdAt).toISOString();
   if (note.updatedAt) head.modified = new Date(note.updatedAt).toISOString();
   const data = { ...head, ...extra };
@@ -144,6 +150,7 @@ export function parseNoteFile(rel, content, stat) {
     folder: dir === "." ? "" : dir,
     pinned: data.pinned === true || tags.includes("Keep/Pinned"),
     archived: data.archived === true || tags.includes("Keep/Archived"),
+    color: hexColor(data.color),
     deleted: false,
     createdAt: toMs(data.created) ?? Math.round(birth),
     updatedAt: toMs(data.modified) ?? Math.round(stat.mtimeMs),
@@ -188,7 +195,17 @@ const normFm = (fm) => {
 };
 
 export function contentHash(n) {
-  const key = JSON.stringify([n.title ?? "", normBody(n.body), n.folder ?? "", !!n.pinned, !!n.archived, normFm(n.fm), n.createdAt ?? 0]);
+  // The color is appended only when set, so hashes from older downloads stay valid.
+  const key = JSON.stringify([
+    n.title ?? "",
+    normBody(n.body),
+    n.folder ?? "",
+    !!n.pinned,
+    !!n.archived,
+    normFm(n.fm),
+    n.createdAt ?? 0,
+    ...(n.color ? [n.color] : []),
+  ]);
   return createHash("sha1").update(key).digest("hex");
 }
 

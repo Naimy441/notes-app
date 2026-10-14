@@ -23,9 +23,14 @@ type Dialog =
   | { kind: "confirm"; title: string; message?: string; ok?: string; danger?: boolean; resolve: (v: boolean) => void }
   | { kind: "link"; text: string; url: string; resolve: (v: { text: string; url: string } | null) => void };
 
+interface Swatches {
+  current: string | null;
+  /** `live` is set while a custom color is still being dragged in its picker. */
+  pick: (color: string | null, live?: boolean) => void;
+}
 interface UIState {
   toasts: Toast[];
-  menu: { x: number; y: number; alignRight: boolean; up: boolean; items: MenuItem[] } | null;
+  menu: { x: number; y: number; alignRight: boolean; up: boolean; items: MenuItem[]; swatches?: Swatches } | null;
   dialog: Dialog | null;
 }
 
@@ -48,7 +53,26 @@ function dismissToast(id: number) {
   setTimeout(() => set({ toasts: ui.toasts.filter((t) => t.id !== id) }), 220);
 }
 
-export function menu(anchor: Element, items: MenuItem[]) {
+/** Highlight colors offered for a note's border. Mid-tone, so they read on light and dark cards. */
+export const NOTE_COLORS: { name: string; hex: string }[] = [
+  { name: "Red", hex: "#e5484d" },
+  { name: "Orange", hex: "#f76b15" },
+  { name: "Yellow", hex: "#f5b800" },
+  { name: "Green", hex: "#30a46c" },
+  { name: "Teal", hex: "#12a594" },
+  { name: "Blue", hex: "#3e63dd" },
+  { name: "Purple", hex: "#8e4ec6" },
+  { name: "Pink", hex: "#d6409f" },
+  { name: "Brown", hex: "#a07553" },
+  { name: "Gray", hex: "#8b8d98" },
+];
+
+/** A row of color swatches (plus a custom color and "none") under `anchor`. */
+export function colorMenu(anchor: Element, current: string | null, pick: Swatches["pick"]) {
+  menu(anchor, [], { current, pick });
+}
+
+export function menu(anchor: Element, items: MenuItem[], swatches?: Swatches) {
   const r = anchor.getBoundingClientRect();
   const alignRight = r.left + r.width / 2 > innerWidth / 2;
   const up = r.bottom > innerHeight * 0.62;
@@ -59,6 +83,7 @@ export function menu(anchor: Element, items: MenuItem[]) {
       alignRight,
       up,
       items,
+      swatches,
     },
   });
 }
@@ -94,7 +119,7 @@ export function OverlayHost() {
       {m && (
         <div className="menu-layer" onClick={() => set({ menu: null })} onContextMenu={(e) => e.preventDefault()}>
           <div
-            className="menu"
+            className={m.swatches ? "menu with-swatches" : "menu"}
             role="menu"
             style={{
               [m.alignRight ? "right" : "left"]: m.x,
@@ -103,6 +128,7 @@ export function OverlayHost() {
             }}
             onClick={(e) => e.stopPropagation()}
           >
+            {m.swatches && <SwatchGrid {...m.swatches} close={() => set({ menu: null })} />}
             {m.items.map((it) => (
               <button
                 key={it.label}
@@ -139,6 +165,54 @@ export function OverlayHost() {
         ))}
       </div>
     </>
+  );
+}
+
+function SwatchGrid({ current, pick, close }: Swatches & { close: () => void }) {
+  const [sel, setSel] = useState(current);
+  const [custom, setCustom] = useState(current && !NOTE_COLORS.some((c) => c.hex === current) ? current : null);
+  return (
+    <div className="swatches" role="group" aria-label="Border color">
+      <button
+        type="button"
+        className={`swatch none${!sel ? " on" : ""}`}
+        aria-label="No color"
+        aria-pressed={!sel}
+        title="No color"
+        onClick={() => {
+          close();
+          pick(null);
+        }}
+      />
+      {NOTE_COLORS.map((c) => (
+        <button
+          key={c.hex}
+          type="button"
+          className={`swatch${sel === c.hex ? " on" : ""}`}
+          style={{ ["--swatch" as string]: c.hex }}
+          aria-label={c.name}
+          aria-pressed={sel === c.hex}
+          title={c.name}
+          onClick={() => {
+            close();
+            pick(c.hex);
+          }}
+        />
+      ))}
+      <label className={`swatch custom${custom && sel === custom ? " on" : ""}`} title="Custom color" style={custom ? { ["--swatch" as string]: custom } : undefined}>
+        <input
+          type="color"
+          aria-label="Custom color"
+          value={custom ?? sel ?? "#888888"}
+          onChange={(e) => {
+            const hex = e.target.value.toLowerCase();
+            setCustom(hex);
+            setSel(hex);
+            pick(hex, true);
+          }}
+        />
+      </label>
+    </div>
   );
 }
 

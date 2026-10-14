@@ -18,6 +18,7 @@
   --accent: #f2b200;
   --accent-ink: #2b2000;
   --accent-soft: rgb(242 178 0 / 0.16);
+  --selection: rgb(242 178 0 / 0.34);
   --link: #1a66d6;
   --overlay: rgb(12 12 16 / 0.32);
   --field: rgb(20 20 30 / 0.05);
@@ -44,6 +45,7 @@
   --accent: #f6c445;
   --accent-ink: #231a00;
   --accent-soft: rgb(246 196 69 / 0.14);
+  --selection: rgb(246 196 69 / 0.42);
   --link: #8ab4ff;
   --overlay: rgb(0 0 0 / 0.55);
   --field: rgb(255 255 255 / 0.065);
@@ -86,6 +88,9 @@
 
 html {
   background: var(--bg);
+  /* Locking the page for an open note removes its scrollbar. Keep the space,
+     so the list doesn't re-lay out (and cards don't shift) on open and close. */
+  scrollbar-gutter: stable;
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
   overflow-anchor: none;
@@ -112,14 +117,12 @@ body.locked {
   right: 0;
 }
 /* The open note paints the page behind it too, including the home-indicator
-   inset. A short fixed sheet otherwise leaves the canvas (white) showing. */
+   inset. A short fixed sheet otherwise leaves the canvas (white) showing.
+   Set once the note has finished opening (see Shell.tsx): restyling <html>
+   restyles every element on the page. The locked body's height is inline. */
 html.note-open,
 html.note-open body {
   background: var(--bg-elev);
-}
-html.note-open body.locked {
-  height: calc(100lvh + var(--lock-y, 0px) + env(safe-area-inset-bottom, 0px));
-  min-height: calc(100dvh + var(--lock-y, 0px) + env(safe-area-inset-bottom, 0px));
 }
 
 button {
@@ -129,7 +132,7 @@ button {
 }
 
 ::selection {
-  background: var(--accent-soft);
+  background: var(--selection);
 }
 
 :focus-visible {
@@ -501,6 +504,12 @@ main.content {
 }
 .card:active {
   transform: scale(0.975);
+}
+/* Cards off screen skip layout and paint until they scroll near the viewport
+   (each remembers its real height once it has been shown). */
+.masonry .card {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 170px;
 }
 .card.enter {
   animation: card-in 0.42s var(--ease) both;
@@ -1286,7 +1295,7 @@ mark.hit {
 }
 .editor {
   position: fixed;
-  z-index: 71;
+  z-index: 72;
   inset: 0;
   width: auto;
   height: auto;
@@ -1380,8 +1389,13 @@ mark.hit {
     animation: modal-in 0.34s var(--ease);
     overflow: hidden;
   }
+  /* The note's content fades where it is while a plain surface (lib/vt.ts)
+     shrinks onto the card underneath. Nothing in the sheet is scaled. */
   .editor.closing {
-    animation: modal-out 0.2s var(--ease) forwards;
+    animation: note-fade 0.12s ease forwards;
+  }
+  .editor-backdrop.closing {
+    animation: fade-out 0.3s var(--ease) forwards;
   }
   @keyframes modal-in {
     from {
@@ -1389,18 +1403,82 @@ mark.hit {
       opacity: 0;
     }
   }
-  @keyframes modal-out {
-    to {
-      transform: translateX(-50%) translateY(8px) scale(0.98);
-      opacity: 0;
-    }
+}
+/* Opened from a card: the surface grows out of the card, then the note fades in on it. */
+.editor.from-card {
+  animation: fade-in 0.16s ease 0.14s both;
+}
+.editor.from-card.closing {
+  animation: note-fade 0.12s ease forwards;
+}
+.morph-surface {
+  position: fixed;
+  z-index: 71;
+  box-sizing: border-box;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  box-shadow: var(--sheet-shadow);
+  transform-origin: 0 0;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+/* A colored border chosen for the note (More → Color). */
+.card.has-color {
+  border-color: var(--note-color);
+  box-shadow:
+    inset 0 0 0 1px var(--note-color),
+    var(--card-shadow);
+}
+@media (hover: hover) {
+  .card.has-color:hover {
+    border-color: var(--note-color);
+    box-shadow:
+      inset 0 0 0 1px var(--note-color),
+      var(--card-shadow-hover);
   }
 }
-.editor.vt {
-  animation: none;
+.card.has-color.selected {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
-.editor-backdrop.vt {
-  animation: fade-in 0.3s var(--ease);
+@media (min-width: 700px) {
+  .editor.has-color {
+    border-color: var(--note-color);
+    box-shadow:
+      inset 0 0 0 1px var(--note-color),
+      var(--sheet-shadow);
+  }
+}
+@media (max-width: 699px) {
+  .editor.has-color .editor-top {
+    box-shadow: inset 0 3px 0 var(--note-color);
+  }
+}
+
+/* Back to the top of a long note. */
+.to-top {
+  position: absolute;
+  z-index: 2;
+  right: 16px;
+  bottom: calc(var(--sab) + 16px);
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: var(--bg-elev);
+  color: var(--text-2);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--sheet-shadow);
+  animation: fab-in 0.3s var(--ease-spring) both;
+}
+.editor.kb .to-top {
+  bottom: 12px;
+}
+.to-top:hover {
+  color: var(--text);
 }
 
 .editor-top {
@@ -1587,7 +1665,7 @@ mark.hit {
 }
 .note-body ::selection,
 .note-body .cm-content ::selection {
-  background: var(--accent-soft);
+  background: var(--selection);
 }
 .folder-btn {
   display: inline-flex;
@@ -1773,6 +1851,60 @@ mark.hit {
 }
 .menu button.danger {
   color: var(--danger);
+}
+.menu.with-swatches {
+  min-width: 0;
+}
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(6, 36px);
+  gap: 6px;
+  padding: 4px;
+}
+.menu .swatch {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 999px;
+  background: var(--swatch, transparent);
+  border: 1px solid rgb(0 0 0 / 0.08);
+  transition: transform 0.12s var(--ease);
+  cursor: pointer;
+}
+.menu .swatch:hover {
+  background: var(--swatch, var(--field));
+  transform: scale(1.08);
+}
+.swatch.on {
+  box-shadow:
+    0 0 0 2px var(--bg-elev),
+    0 0 0 4px var(--text);
+}
+.swatch.none {
+  border: 2px solid var(--border-strong);
+}
+.swatch.none::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 15%;
+  height: 70%;
+  border-left: 2px solid var(--muted);
+  transform: rotate(45deg);
+}
+.swatch.custom {
+  display: block;
+  background: var(--swatch, conic-gradient(#e5484d, #f5b800, #30a46c, #12a594, #3e63dd, #8e4ec6, #d6409f, #e5484d));
+  overflow: hidden;
+}
+.swatch.custom input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .dialog {
@@ -2094,25 +2226,6 @@ mark.hit {
 ::view-transition-group(*) {
   animation-duration: 0.34s;
   animation-timing-function: var(--ease);
-}
-::view-transition-group(note-sheet) {
-  animation-duration: 0.38s;
-  border-radius: 18px;
-  overflow: hidden;
-  background: var(--bg-elev);
-}
-html.note-vt::view-transition {
-  background: var(--bg);
-}
-html.note-vt::view-transition-old(root),
-html.note-vt::view-transition-new(root) {
-  animation: none;
-}
-::view-transition-old(note-sheet),
-::view-transition-new(note-sheet) {
-  height: 100%;
-  object-fit: cover;
-  object-position: top;
 }
 
 html.theme-vt::view-transition-old(root) {

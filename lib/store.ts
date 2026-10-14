@@ -20,6 +20,7 @@ import {
 } from "firebase/firestore";
 import { useSyncExternalStore } from "react";
 import { getDb } from "./firebase";
+import { clearSnapshot, readSnapshot, writeSnapshot, type Snapshot } from "./snapshot";
 import type { FolderDoc, Note } from "./types";
 
 export interface StoreState {
@@ -62,6 +63,7 @@ function emit() {
     }
     state = { ...state, version: state.version + 1 };
     listeners.forEach((l) => l());
+    scheduleSnapshot();
   });
 }
 
@@ -105,6 +107,21 @@ function toMillis(v: unknown): number {
   return 0;
 }
 
+const HEX = /^#[0-9a-f]{6}$/i;
+
+const sameNote = (a: Note, b: Note) =>
+  a.updatedAt === b.updatedAt &&
+  a.title === b.title &&
+  a.body === b.body &&
+  a.folder === b.folder &&
+  a.pinned === b.pinned &&
+  a.archived === b.archived &&
+  a.deleted === b.deleted &&
+  a.createdAt === b.createdAt &&
+  (a.color ?? null) === (b.color ?? null) &&
+  (a.path ?? null) === (b.path ?? null) &&
+  (a.fm ?? null) === (b.fm ?? null);
+
 function ingestNote(snap: DocumentSnapshot) {
   const d = snap.data({ serverTimestamps: "estimate" });
   if (!d) return;
@@ -118,6 +135,7 @@ function ingestNote(snap: DocumentSnapshot) {
     deleted: !!d.deleted,
     createdAt: toMillis(d.createdAt),
     updatedAt: toMillis(d.updatedAt),
+    color: typeof d.color === "string" && HEX.test(d.color) ? d.color.toLowerCase() : null,
     path: d.path ?? null,
     fm: d.fm ?? null,
   };
@@ -125,6 +143,9 @@ function ingestNote(snap: DocumentSnapshot) {
   const existing = state.notes.get(snap.id);
   // Last writer wins; never clobber a newer local edit with an older echo.
   if (existing && existing.updatedAt > incoming.updatedAt) return;
+  // Same note as already shown (e.g. from the startup snapshot): keep the
+  // object, so its card doesn't re-render.
+  if (existing && sameNote(existing, incoming)) return;
   state.notes.set(snap.id, incoming);
 }
 
@@ -138,12 +159,64 @@ function ingestFolder(snap: DocumentSnapshot) {
   state.folders.set(snap.id, { id: snap.id, path: d.path ?? "", deleted: !!d.deleted, updatedAt });
 }
 
+// ---------------------------------------------------------------------------
+// Startup snapshot (see snapshot.ts)
+// ---------------------------------------------------------------------------
+
+let snapshotRead: Promise<Snapshot | null> | null = null;
+
+/** Start reading the startup snapshot; call as early as possible on a signed-in device. */
+export function preloadSnapshot() {
+  snapshotRead ??= readSnapshot().catch(() => null);
+  return snapshotRead;
+}
+
+let firestoreCacheRead = false;
+let snapshotTimer: ReturnType<typeof setTimeout> | undefined;
+let snapshotVersion = -1;
+let snapshotsOff = false;
+
+/**
+ * Save the list once it has been still for a few seconds (and holds everything
+ * Firestore's cache had). Not while typing: each save copies every note.
+ * Backgrounding or closing the app saves straight away.
+ */
+function scheduleSnapshot() {
+  if (snapshotsOff || !firestoreCacheRead) return;
+  if (snapshotTimer) clearTimeout(snapshotTimer);
+  snapshotTimer = setTimeout(saveSnapshot, 4000);
+}
+
+function saveSnapshot() {
+  if (snapshotTimer) clearTimeout(snapshotTimer);
+  snapshotTimer = undefined;
+  if (snapshotsOff || !firestoreCacheRead || snapshotVersion === state.version) return;
+  snapshotVersion = state.version;
+  writeSnapshot([...state.notes.values()], [...state.folders.values()]).catch((e) => console.warn("snapshot write failed", e));
+}
+
+/** On sign-out: stop saving the snapshot and delete it. */
+export function forgetSnapshot() {
+  snapshotsOff = true;
+  if (snapshotTimer) clearTimeout(snapshotTimer);
+  snapshotTimer = undefined;
+  return clearSnapshot();
+}
+
 let cachePromise: Promise<void> | null = null;
 
 /** Paint from the on-device cache. Safe to call before auth resolves. */
 export function loadCache() {
   if (!cachePromise) {
     cachePromise = (async () => {
+      // The snapshot usually arrives well before Firestore's cache; show it meanwhile.
+      preloadSnapshot().then((snap) => {
+        if (!snap || firestoreCacheRead) return;
+        for (const n of snap.notes) if (!state.notes.has(n.id)) state.notes.set(n.id, n);
+        for (const f of snap.folders) if (!state.folders.has(f.id)) state.folders.set(f.id, f);
+        state.cacheLoaded = true;
+        emit();
+      });
       const db = getDb();
       try {
         const [ns, fs] = await Promise.all([
@@ -155,6 +228,7 @@ export function loadCache() {
       } catch (e) {
         console.warn("cache read failed", e);
       }
+      firestoreCacheRead = true;
       state.cacheLoaded = true;
       emit();
     })();
@@ -286,7 +360,10 @@ if (typeof window !== "undefined") {
   window.addEventListener("online", setOnline);
   window.addEventListener("offline", setOnline);
   // Don't lose debounced edits when the app is backgrounded or closed.
-  const flushAll = () => [...writeTimers.keys()].forEach(flushNote);
+  const flushAll = () => {
+    [...writeTimers.keys()].forEach(flushNote);
+    if (snapshotTimer) saveSnapshot();
+  };
   window.addEventListener("pagehide", flushAll);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") flushAll();
@@ -316,6 +393,7 @@ function flushNote(id: string) {
         pinned: n.pinned,
         archived: n.archived,
         deleted: n.deleted,
+        color: n.color ?? null,
         createdAt: n.createdAt,
         updatedAt: n.updatedAt,
         syncedAt: serverTimestamp(),

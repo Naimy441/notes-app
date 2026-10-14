@@ -149,8 +149,17 @@ function blockRange(doc: Text, from: number, to: number) {
   return { from: start, to: Math.max(start, end) };
 }
 
+/**
+ * Where markup is revealed: the caret, or for a selection the end it started
+ * from. Revealing every line a selection crosses re-flows the text under the
+ * finger (or mouse) while it is still dragging, so the selection jumps.
+ */
+function revealAt(state: EditorState, from: number, to: number) {
+  return state.selection.ranges.some((r) => r.anchor >= from && r.anchor <= to);
+}
+
 function selectionTouches(view: EditorView, from: number, to: number) {
-  return view.state.selection.ranges.some((r) => r.from <= to && r.to >= from);
+  return revealAt(view.state, from, to);
 }
 
 function childText(node: SyntaxNode, state: EditorState, name: string) {
@@ -197,15 +206,11 @@ function tableModel(node: SyntaxNode, state: EditorState) {
 
 // ─── decorations ─────────────────────────────────────────────────────────────
 
-/** Lines the cursor/selection touches; markup stays visible there so it can be edited. */
+/** Lines with a caret (or a selection's anchor); markup stays visible there so it can be edited. */
 function activeLines(view: EditorView): Set<number> {
   const lines = new Set<number>();
   if (!view.hasFocus) return lines;
-  for (const r of view.state.selection.ranges) {
-    const a = view.state.doc.lineAt(r.from).number;
-    const b = view.state.doc.lineAt(r.to).number;
-    for (let n = a; n <= b; n++) lines.add(n);
-  }
+  for (const r of view.state.selection.ranges) lines.add(view.state.doc.lineAt(r.anchor).number);
   return lines;
 }
 
@@ -497,9 +502,6 @@ const theme = EditorView.theme({
   ".cm-wikilink": { textDecorationStyle: "dotted" },
 });
 
-function cursorInside(state: EditorState, from: number, to: number) {
-  return state.selection.ranges.some((r) => r.from <= to && r.to >= from);
-}
 
 /** Tables and fenced code, drawn as blocks whenever the caret is outside them. */
 function renderBlocks(state: EditorState): DecorationSet {
@@ -508,7 +510,7 @@ function renderBlocks(state: EditorState): DecorationSet {
     enter(node) {
       if (node.name !== "FencedCode" && node.name !== "CodeBlock" && node.name !== "Table") return;
       const range = blockRange(state.doc, node.from, node.to);
-      if (range.to <= range.from || cursorInside(state, range.from, range.to)) return false;
+      if (range.to <= range.from || revealAt(state, range.from, range.to)) return false;
       if (node.name === "Table") {
         const model = tableModel(node.node, state);
         out.push(Decoration.replace({ widget: new TableWidget(model.header, model.rows, model.align), block: true }).range(range.from, range.to));

@@ -8,6 +8,7 @@ import { Dictation, canDictate, type DictationLang, type DictationPhase } from "
 import { beginDictation, endDictation, insertPhrase, revealDictation, showInterim } from "@/lib/dictationEditor";
 import { scrollCaretIntoView } from "@/lib/editorKit";
 import { getAuthInstance } from "@/lib/firebase";
+import { unfreeze } from "@/lib/freeze";
 import { setPref, usePrefs } from "@/lib/prefs";
 import { createNote, discardNote, flushPending, newNoteId, purgeNotes, updateNote, useStore } from "@/lib/store";
 import type { Note } from "@/lib/types";
@@ -21,29 +22,35 @@ import {
   LinkIcon,
   MicIcon,
   MoreIcon,
+  PaletteIcon,
   PinFilledIcon,
   PinIcon,
   PromptIcon,
   RestoreIcon,
   SparkIcon,
+  ToTopIcon,
   TrashIcon,
   UnarchiveIcon,
   UndoIcon,
 } from "./icons";
-import { confirm, linkPrompt, menu, prompt, toast } from "./overlays";
+import { colorMenu, confirm, linkPrompt, menu, prompt, toast } from "./overlays";
 
 interface Props {
   /** Existing note id, or "new" for a fresh draft. */
   noteId: string;
   defaultFolder: string;
   folders: string[];
-  /** Set while a view transition is morphing the card into this sheet. */
-  vtName: boolean;
+  /** Opened from a card on a wide screen: the content fades in over a surface growing out of the card. */
+  fromCard: boolean;
   closing: boolean;
   onClose: () => void;
   onCreated: (id: string) => void;
   onWikilink: (target: string) => void;
 }
+
+/** The empty page area under the note (not the text, title or edit time). */
+const isBlank = (target: EventTarget, scroller: EventTarget) =>
+  target === scroller || (target instanceof HTMLElement && target.classList.contains("editor-tail"));
 
 /** Build a Markdown link, normalizing bare domains and escaping characters that would break it. */
 function markdownLink(text: string, rawUrl: string) {
@@ -117,7 +124,7 @@ function useVisualViewport(ref: React.RefObject<HTMLElement | null>, onInset: ()
   return kb;
 }
 
-export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClose, onCreated, onWikilink }: Props) {
+export function Editor({ noteId, defaultFolder, folders, fromCard, closing, onClose, onCreated, onWikilink }: Props) {
   const { notes } = useStore();
   const prefs = usePrefs();
   const isNew = noteId.startsWith("new");
@@ -264,6 +271,21 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
   useLayoutEffect(() => {
     focusBodyRef.current = focusBody;
   });
+
+  // ── scrolling ─────────────────────────────────────────────────────────────
+  const scroller = useRef<HTMLDivElement>(null);
+  const pressedBlank = useRef(false);
+  const [farDown, setFarDown] = useState(false);
+  const scrollFrame = useRef(0);
+  const onScroll = () => {
+    if (scrollFrame.current) return;
+    scrollFrame.current = requestAnimationFrame(() => {
+      scrollFrame.current = 0;
+      const el = scroller.current;
+      if (el) setFarDown(el.scrollTop > Math.max(480, el.clientHeight));
+    });
+  };
+  useEffect(() => () => cancelAnimationFrame(scrollFrame.current), []);
 
   // ── links ─────────────────────────────────────────────────────────────────
   const addLink = async () => {
@@ -454,11 +476,33 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
     toast(msg, { label: "Undo", run: () => updateNote(id, undo, { touch: false }) });
   };
 
+  const pickColor = (anchor: HTMLElement) => {
+    if (!n) return;
+    const before = n.color ?? null;
+    colorMenu(anchor, before, (color, live) => {
+      // A custom color streams in while its picker is dragged; write that debounced.
+      updateNote(id, { color }, { touch: false, debounce: live });
+      if (!color) toast("Color removed", { label: "Undo", run: () => updateNote(id, { color: before }, { touch: false }) });
+    });
+  };
+
+  const moveToTop = () => {
+    // "Top" is the newest "modified" date. The list holds an edited note in
+    // place while you work on it; let this one go to the top once it closes.
+    updateNote(id, {});
+    unfreeze(id);
+    toast("Moved to the top");
+  };
+
   const more = (anchor: HTMLElement) => {
     type Item = { label: string; icon: React.ReactNode; danger?: boolean; run: () => void };
     const items: Item[] = [
       { label: "Add link", icon: <LinkIcon size={20} />, run: addLink },
       { label: "Move to folder", icon: <FolderIcon size={20} />, run: () => setPicking(true) },
+      ...(n && !n.deleted ? [{ label: "Color", icon: <PaletteIcon size={20} />, run: () => pickColor(anchor) }] : []),
+      ...(n && !n.deleted && !n.archived && prefs.sort === "updatedAt"
+        ? [{ label: "Move to top", icon: <ToTopIcon size={20} />, run: moveToTop }]
+        : []),
       {
         label: "Copy text",
         icon: <CopyIcon size={20} />,
@@ -517,11 +561,11 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
 
   return (
     <>
-      <div className={`editor-backdrop${vtName ? " vt" : ""}${closing ? " closing" : ""}`} onClick={close} />
+      <div className={`editor-backdrop${closing ? " closing" : ""}`} onClick={close} />
       <div
         ref={sheet}
-        className={`editor${vtName ? " vt" : ""}${closing ? " closing" : ""}${kb ? " kb" : ""}${aiBusy ? " ai-busy" : ""}`}
-        style={vtName ? { viewTransitionName: "note-sheet" } : undefined}
+        className={`editor${fromCard ? " from-card" : ""}${closing ? " closing" : ""}${kb ? " kb" : ""}${aiBusy ? " ai-busy" : ""}${n?.color ? " has-color" : ""}`}
+        style={n?.color ? ({ "--note-color": n.color } as React.CSSProperties) : undefined}
         role="dialog"
         aria-label={title || "Note"}
       >
@@ -589,11 +633,19 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
         </div>
 
         <div
+          ref={scroller}
           className="editor-scroll"
+          onScroll={onScroll}
+          onPointerDown={(e) => {
+            pressedBlank.current = isBlank(e.target, e.currentTarget);
+          }}
           onClick={(e) => {
             // Tapping the blank space under the note continues it, like a paper page.
-            const t = e.target as HTMLElement;
-            if (t === e.currentTarget || t.classList.contains("editor-tail")) focusBody();
+            // Only a press that started there: a drag-selection that ends below
+            // the text also clicks here, and must keep its selection.
+            const blank = pressedBlank.current && isBlank(e.target, e.currentTarget);
+            pressedBlank.current = false;
+            if (blank && (window.getSelection()?.isCollapsed ?? true)) focusBody();
           }}
         >
           <div
@@ -646,6 +698,17 @@ export function Editor({ noteId, defaultFolder, folders, vtName, closing, onClos
             )}
           </div>
         </div>
+        {farDown && !aiBusy && (
+          <button
+            className="to-top"
+            aria-label="Back to the top of the note"
+            title="Back to top"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => scroller.current?.scrollTo({ top: 0, behavior: "smooth" })}
+          >
+            <ToTopIcon size={20} />
+          </button>
+        )}
         {aiBusy && (
           <div className="ai-working" role="status">
             <SparkIcon size={16} />
