@@ -14,6 +14,7 @@ import { Editor } from "./Editor";
 import { prewarmEditor } from "./NoteBody";
 import { FolderCard } from "./FolderCard";
 import { FilingSheet } from "./FilingSheet";
+import { ReplaceSheet } from "./ReplaceSheet";
 import { FolderPicker } from "./FolderPicker";
 import {
   ArchiveIcon,
@@ -31,6 +32,7 @@ import {
   NotesIcon,
   PlusIcon,
   RenameIcon,
+  ReplaceIcon,
   SearchIcon,
   TrashIcon,
 } from "./icons";
@@ -344,6 +346,8 @@ export function Shell({ user, onSignOut }: Props) {
   }, [openId]);
 
   const [filing, setFiling] = useState(false);
+  /** "Replace in notes" sheet, with the query it opened with. */
+  const [replacing, setReplacing] = useState<string | null>(null);
 
   // ── chrome ────────────────────────────────────────────────────────────────
   const [drawer, setDrawer] = useState<"open" | "closing" | null>(null);
@@ -476,6 +480,7 @@ export function Shell({ user, onSignOut }: Props) {
         hue={hue}
         terms={terms}
         gridProps={gridProps}
+        onReplace={() => setReplacing(q.trim())}
       />
     );
   } else if (route.view === "notes") {
@@ -683,6 +688,7 @@ export function Shell({ user, onSignOut }: Props) {
           onClose={closeEditor}
           onCreated={onCreated}
           onWikilink={openWikilink}
+          searchQuery={route.q?.trim() || undefined}
         />
       )}
 
@@ -706,6 +712,7 @@ export function Shell({ user, onSignOut }: Props) {
         />
       )}
 
+      {replacing !== null && <ReplaceSheet notes={allNotes} initialQuery={replacing} onClose={() => setReplacing(null)} />}
       {filing && <FilingSheet tree={tree} hue={hue} notes={allNotes} onClose={() => setFiling(false)} />}
 
       <OverlayHost />
@@ -929,6 +936,7 @@ function SearchResults({
   hue,
   terms,
   gridProps,
+  onReplace,
 }: {
   q: string;
   results: Note[];
@@ -937,6 +945,7 @@ function SearchResults({
   hue: (p: string) => number;
   terms: string[];
   gridProps: GridProps;
+  onReplace: () => void;
 }) {
   if (!q.trim()) return <Empty icon={<SearchIcon size={72} />} text="Search titles, text and folders" />;
   return (
@@ -947,8 +956,16 @@ function SearchResults({
           <FolderGrid paths={folderHits} tree={tree} hue={hue} animateKey={`s:${q}`} onMenu={() => {}} />
         </>
       )}
-      <div className="section-label">
-        {results.length} {results.length === 1 ? "note" : "notes"}
+      <div className="section-row">
+        <div className="section-label">
+          {results.length} {results.length === 1 ? "note" : "notes"}
+        </div>
+        {results.length > 0 && (
+          <button type="button" className="section-action" onClick={onReplace} title="Find and replace across your notes">
+            <ReplaceIcon size={16} />
+            Replace in notes
+          </button>
+        )}
       </div>
       {results.length ? (
         <NoteGrid notes={results} resetKey={`s:${q}`} showFolder terms={terms} {...gridProps} />

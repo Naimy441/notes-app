@@ -140,6 +140,15 @@ export const MicIcon = make(
     <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5" />
   </>,
 );
+export const ChevronUpIcon = make(<path d="m6 15 6-6 6 6" />);
+export const ChevronDownIcon = make(<path d="m6 9 6 6 6-6" />);
+export const FindReplaceIcon = make(
+  <>
+    <circle cx="10" cy="10" r="5.5" />
+    <path d="m14 14 3 3M4 20.5h7m6-3.5h3.5M18.5 14.5 21 17l-2.5 2.5" />
+  </>,
+);
+export const ReplaceIcon = make(<path d="M4 8h12.5M13 4.5 16.5 8 13 11.5M20 16H7.5M11 12.5 7.5 16l3.5 3.5" />);
 export const ToTopIcon = make(<path d="M5 4.5h14M12 20V9m-5.5 5.5L12 9l5.5 5.5" />);
 export const PaletteIcon = make(
   <>

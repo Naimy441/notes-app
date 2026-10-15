@@ -5,7 +5,8 @@ A Google Keep–style notes app for one person, stored in Firestore and synced a
 - **Mobile-first**: two-column masonry on phones, up to six columns with a sidebar on desktop. Installs to the iPhone home screen.
 - **Offline-first**: notes are read from Firestore's on-device cache before the network responds. Edits made offline are queued and sync when you're back online. A service worker caches the app itself, so it opens with no connection at all.
 - **Folders**: folders show as cards with page previews, nested to any depth. You can create, rename, delete and move between them.
-- **Search** covers titles, bodies and folder names, and highlights the matches.
+- **Search** covers titles, bodies and folder names, and highlights the matches. Opening a note from search shows the matches inside it.
+- **Find & replace** in a note (⌘F, or ⋯ → Find & replace): every match highlighted, match count, next/previous, replace one or all, with match case, whole word, regex (`$1` in the replacement) and keep-case options. **Replace in notes** (on search results) previews every change across your notes, lets you untick notes, and can be undone.
 - **Pinned** notes come first. You choose whether everything else is ordered by date modified or date created. **Move to top** (in a note's ⋯ menu) brings a note back to the top of the list.
 - **Colors**: give a note a colored border from its ⋯ menu → Color (ten presets or any custom color).
 - **One editor, live preview**: notes are Markdown, shown formatted as you write (headings, bold, checklists you can tick, links, tables, code); the raw symbols appear only on the line you're editing. Arabic lines read right-to-left, line by line.
@@ -76,7 +77,7 @@ npm run dev:emulators   # localhost:3000 against the emulators instead
 
 With `dev:emulators`, the sign-in button signs in as the owner directly, without a Google account picker.
 
-Keyboard shortcuts (desktop): `/` focuses search, `c` creates a note, `Esc` closes a note (or stops dictation), `⌘↵` closes the editor, `⌘K` adds a link (select text first to link it), `⌘Z` undoes edits including AI edits, `Esc` leaves multi-select.
+Keyboard shortcuts (desktop): `/` focuses search, `c` creates a note, `Esc` closes a note (or stops dictation, or closes find), `⌘↵` closes the editor, `⌘F` finds in the note (`↵`/`⇧↵` or `⌘G`/`⇧⌘G` for next/previous), `⌘⇧H` replaces (`⌘↵` in the replace field replaces all; `Alt+C/W/R/P` toggle match case, whole word, regex, keep case), `⌘K` adds a link (select text first to link it), `⌘Z` undoes edits including AI edits, `Esc` leaves multi-select.
 
 ## Code map
 
@@ -86,6 +87,7 @@ Keyboard shortcuts (desktop): `/` focuses search, `c` creates a note, `Esc` clos
 | `lib/snapshot.ts` | One-record IndexedDB copy of the note list, so the app paints notes immediately on launch (cleared on sign-out) |
 | `lib/derive.ts` | Folder tree, search, sorting, dates |
 | `lib/markdown.ts` | markdown-it for card previews: task lists, wikilinks, per-line text direction |
+| `lib/find.ts`, `lib/findEditor.ts` | Find & replace matching (plain, whole word, regex, keep case) and the in-note highlights and replace commands |
 | `lib/livePreview.ts` | CodeMirror live preview: hidden Markdown marks, checkboxes, links, rendered tables and code |
 | `lib/editorKit.ts`, `lib/bidi.ts` | Per-line direction for mixed Arabic/English, caret fixes, keeping the caret in view |
 | `lib/dictation.ts`, `lib/dictationEditor.ts` | Voice dictation (Web Speech API) and inserting phrases with a live grey preview |

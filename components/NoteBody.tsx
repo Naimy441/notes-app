@@ -8,6 +8,7 @@ import { EditorView, keymap, placeholder } from "@codemirror/view";
 import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { bidiHitTest, bidiKeys, bidiLayout, readingRoom, scrollCaretIntoView } from "@/lib/editorKit";
 import { dictationField } from "@/lib/dictationEditor";
+import { findInNote } from "@/lib/findEditor";
 import { livePreview, markdownHighlight } from "@/lib/livePreview";
 
 let applyBodyEditable: (on: boolean) => void = () => {};
@@ -81,6 +82,7 @@ function bodyExtensions(editable: Compartment, cb: Callbacks): Extension[] {
     syntaxHighlighting(markdownHighlight),
     livePreview({ onWikilink: (t) => cb.onWikilink(t) }),
     dictationField,
+    findInNote(),
     bidiLayout(),
     bidiHitTest(),
     readingRoom(),
@@ -101,7 +103,9 @@ function bodyExtensions(editable: Compartment, cb: Callbacks): Extension[] {
     placeholder("Note"),
     EditorView.updateListener.of((u) => {
       const remote = u.transactions.every((tr) => tr.annotation(Transaction.remote));
-      if ((u.docChanged || u.selectionSet) && !remote) {
+      // Find moves the selection to a match and scrolls it to the middle itself.
+      const finding = u.transactions.some((tr) => tr.isUserEvent("select.search"));
+      if ((u.docChanged || u.selectionSet) && !remote && !finding) {
         // CodeMirror's own scroller does not scroll the sheet. One frame
         // later, move the sheet only if the caret has left the visible band.
         const view = u.view;

@@ -7,6 +7,8 @@ import { baseName, longDate } from "@/lib/derive";
 import { Dictation, canDictate, type DictationLang, type DictationPhase } from "@/lib/dictation";
 import { beginDictation, endDictation, insertPhrase, revealDictation, showInterim } from "@/lib/dictationEditor";
 import { scrollCaretIntoView } from "@/lib/editorKit";
+import { DEFAULT_FIND, compileFind, findAll } from "@/lib/find";
+import { stepMatch } from "@/lib/findEditor";
 import { getAuthInstance } from "@/lib/firebase";
 import { unfreeze } from "@/lib/freeze";
 import { setPref, usePrefs } from "@/lib/prefs";
@@ -18,6 +20,7 @@ import {
   ArchiveIcon,
   BackIcon,
   CopyIcon,
+  FindReplaceIcon,
   FolderIcon,
   LinkIcon,
   MicIcon,
@@ -33,6 +36,7 @@ import {
   UnarchiveIcon,
   UndoIcon,
 } from "./icons";
+import { FindBar, type FindRequest } from "./FindBar";
 import { colorMenu, confirm, linkPrompt, menu, prompt, toast } from "./overlays";
 
 interface Props {
@@ -46,6 +50,23 @@ interface Props {
   onClose: () => void;
   onCreated: (id: string) => void;
   onWikilink: (target: string) => void;
+  /** The list search that was open when this note was opened: its matches are shown in the note. */
+  searchQuery?: string;
+}
+
+/**
+ * What to look for in a note opened from list search: the whole query if it's
+ * in the note, else its longest word that is. Null when the search matched
+ * something else (e.g. the folder name).
+ */
+function findQueryFor(text: string, q: string): string | null {
+  const has = (t: string) => {
+    const { re } = compileFind({ ...DEFAULT_FIND, query: t });
+    return !!re && findAll(text, re, 1).length > 0;
+  };
+  if (has(q)) return q;
+  const words = q.split(/\s+/).filter(Boolean).sort((a, b) => b.length - a.length);
+  return words.find(has) ?? null;
 }
 
 /** The empty page area under the note (not the text, title or edit time). */
@@ -124,7 +145,7 @@ function useVisualViewport(ref: React.RefObject<HTMLElement | null>, onInset: ()
   return kb;
 }
 
-export function Editor({ noteId, defaultFolder, folders, fromCard, closing, onClose, onCreated, onWikilink }: Props) {
+export function Editor({ noteId, defaultFolder, folders, fromCard, closing, onClose, onCreated, onWikilink, searchQuery }: Props) {
   const { notes } = useStore();
   const prefs = usePrefs();
   const isNew = noteId.startsWith("new");
@@ -246,11 +267,69 @@ export function Editor({ noteId, defaultFolder, folders, fromCard, closing, onCl
     onClose();
   }, [id, notes, onClose]);
 
+  // ── find & replace ────────────────────────────────────────────────────────
+  const [find, setFind] = useState<FindRequest | null>(null);
+  const openFind = useCallback((req: Omit<FindRequest, "seq">) => {
+    setFind((cur) => ({ ...req, seq: (cur?.seq ?? 0) + 1 }));
+  }, []);
+  const closeFind = useCallback(() => {
+    const typing = document.activeElement instanceof HTMLElement && !!document.activeElement.closest(".find-bar");
+    setFind(null);
+    // With a keyboard, Esc goes back to writing at the match you were on.
+    const v = view.current;
+    if (typing && v && !v.state.selection.main.empty && window.matchMedia("(pointer: fine)").matches && !sheet.current?.classList.contains("ai-busy")) {
+      flushSync(() => setEditSurface("body"));
+      v.focus();
+    }
+  }, []);
+  /** Text to search for when ⌘F is pressed: the selection, if it's short and on one line. */
+  const selectedText = () => {
+    if (document.activeElement === titleRef.current) return window.getSelection()?.toString() ?? "";
+    const v = view.current;
+    if (!v?.hasFocus) return "";
+    const { from, to } = v.state.selection.main;
+    return v.state.sliceDoc(from, to);
+  };
+  const keys = useRef({ find, openFind, closeFind, selectedText });
+  useLayoutEffect(() => {
+    keys.current = { find, openFind, closeFind, selectedText };
+  });
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod || picking || document.querySelector(".dialog, .menu-layer")) return;
+      const k = keys.current;
+      const key = e.key.toLowerCase();
+      const replace = (key === "h" && e.shiftKey) || (key === "f" && e.altKey);
+      if (key === "f" || replace) {
+        e.preventDefault();
+        const sel = k.selectedText();
+        const query = sel && !sel.includes("\n") && sel.length <= 200 ? sel : undefined;
+        k.openFind({ query, replace, focus: true });
+      } else if (key === "g" && !e.altKey) {
+        e.preventDefault();
+        const v = view.current;
+        if (k.find && v) stepMatch(v, e.shiftKey ? -1 : 1);
+        else k.openFind({ focus: true });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [picking]);
+  useEffect(() => {
+    // Opened from list search: show where the search hit, without raising the keyboard.
+    const query = searchQuery && view.current ? findQueryFor(`${title}\n${view.current.state.doc.toString()}`, searchQuery) : null;
+    if (query) openFind({ query, focus: false });
+    // Only when the note opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || picking || document.querySelector(".menu-layer, .dialog")) return;
       e.preventDefault();
       if (dictation.current) dictation.current.stop();
+      else if (keys.current.find) keys.current.closeFind();
       else close();
     };
     window.addEventListener("keydown", onKey);
@@ -497,6 +576,7 @@ export function Editor({ noteId, defaultFolder, folders, fromCard, closing, onCl
   const more = (anchor: HTMLElement) => {
     type Item = { label: string; icon: React.ReactNode; danger?: boolean; run: () => void };
     const items: Item[] = [
+      { label: "Find & replace", icon: <FindReplaceIcon size={20} />, run: () => openFind({ replace: true, focus: true }) },
       { label: "Add link", icon: <LinkIcon size={20} />, run: addLink },
       { label: "Move to folder", icon: <FolderIcon size={20} />, run: () => setPicking(true) },
       ...(n && !n.deleted ? [{ label: "Color", icon: <PaletteIcon size={20} />, run: () => pickColor(anchor) }] : []),
@@ -631,6 +711,22 @@ export function Editor({ noteId, defaultFolder, folders, fromCard, closing, onCl
             <MoreIcon />
           </button>
         </div>
+
+        {find && (
+          <FindBar
+            view={view}
+            request={find}
+            readOnly={aiBusy}
+            title={title}
+            titleEl={titleRef}
+            onReplaceTitle={(t) => {
+              if (titleRef.current) titleRef.current.textContent = t;
+              setTitle(t);
+              save({ title: t });
+            }}
+            onClose={closeFind}
+          />
+        )}
 
         <div
           ref={scroller}
